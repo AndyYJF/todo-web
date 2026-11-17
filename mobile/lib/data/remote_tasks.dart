@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
 import 'local_state.dart';
+import 'android_background.dart';
 import 'task.dart';
 import 'task_write.dart';
 import 'todo_api.dart';
 
 class RemoteTaskStore extends ChangeNotifier {
-  RemoteTaskStore(this.storage, {this.allowLocalHttp = false});
+  RemoteTaskStore(this.storage, {this.allowLocalHttp = false, this.background});
+  final AndroidBackground? background;
   final LocalStateFile storage;
   final bool allowLocalHttp;
   TodoApi _api = TodoApi(Uri.parse(defaultOrigin));
@@ -94,6 +97,7 @@ class RemoteTaskStore extends ChangeNotifier {
       final state = await storage.read();
       if (state != null) {
         if (state['schema'] != 1) throw const FormatException('本地数据版本不兼容');
+        _writeGeneration = state['writeGeneration'] as int? ?? 0;
         final site = normalizeOrigin(
           state['origin'] as String,
           allowLocalHttp: allowLocalHttp,
@@ -154,6 +158,14 @@ class RemoteTaskStore extends ChangeNotifier {
       _clearSnapshot();
       error = '本地会话或缓存无法读取，请重新登录';
     }
+    if (background != null) {
+      await background!.attach(
+        '${storage.directory.path}/todo-state.json',
+        local: allowLocalHttp,
+      );
+      if (authenticated && background!.sessionInvalid) await _expire();
+      await _importBackground();
+    }
     ready = true;
     _syncPolling();
     _notify();
@@ -178,6 +190,8 @@ class RemoteTaskStore extends ChangeNotifier {
   Future<bool> _persist() async {
     final state = <String, dynamic>{
       'schema': 1,
+      'revision': DateTime.now().microsecondsSinceEpoch,
+      'writeGeneration': _writeGeneration,
       'origin': origin,
       'theme': theme,
       'draft': draft?.toJson(),
@@ -195,6 +209,7 @@ class RemoteTaskStore extends ChangeNotifier {
     };
     try {
       await storage.save(state);
+      await background?.stateChanged();
       storageError = null;
       _notify();
       return true;
@@ -246,6 +261,53 @@ class RemoteTaskStore extends ChangeNotifier {
         signingIn = false;
         _notify();
       }
+    }
+  }
+
+  Future<void> resume() async {
+    await background?.refreshStatus();
+    if (authenticated && background?.sessionInvalid == true) {
+      await _expire();
+      return;
+    }
+    await _importBackground();
+    await refresh();
+  }
+
+  Future<void> _importBackground() async {
+    if (background == null || !authenticated || writing || pending != null) {
+      return;
+    }
+    final auth = _generation, write = _writeGeneration;
+    try {
+      final snapshot = await background!.snapshot();
+      if (snapshot == null ||
+          snapshot['origin'] != origin ||
+          auth != _generation ||
+          write != _writeGeneration ||
+          writing ||
+          pending != null) {
+        return;
+      }
+      final at = DateTime.parse(snapshot['readAt'] as String).toUtc();
+      if (readAt != null && !at.isAfter(readAt!)) return;
+      final rows = (jsonDecode(snapshot['tasksJson'] as String) as List)
+          .map((r) => TodoTask.fromJson(Map<String, dynamic>.from(r as Map)))
+          .toList();
+      if (rows.map((t) => t.id).toSet().length != rows.length) return;
+      ++_readRequest;
+      _inFlight = null;
+      refreshing = false;
+      _tasks = rows;
+      _projects =
+          rows.map((t) => t.project).where((p) => p.isNotEmpty).toSet().toList()
+            ..sort();
+      readAt = at;
+      cached = true;
+      await _persist();
+      _notify();
+    } catch (_) {
+      /* Keep the existing cache if the background snapshot is unreadable. */
     }
   }
 
@@ -620,6 +682,7 @@ class RemoteTaskStore extends ChangeNotifier {
     _poll?.cancel();
     ++_generation;
     _api.close();
+    background?.dispose();
     super.dispose();
   }
 }

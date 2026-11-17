@@ -1,10 +1,19 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val personalSigning = Properties()
+val signingFile = rootProject.file("signing.properties")
+if (signingFile.exists()) signingFile.inputStream().use { personalSigning.load(it) }
+val buildingRelease = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+if (buildingRelease && !signingFile.exists()) error("Missing local android/signing.properties for personal release signing")
+
 android {
+    buildFeatures { buildConfig = true }
     namespace = "io.github.andyyjf.todo"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -29,11 +38,17 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (signingFile.exists()) create("personal") {
+            storeFile = file(personalSigning.getProperty("storeFile"))
+            storePassword = personalSigning.getProperty("storePassword")
+            keyAlias = personalSigning.getProperty("keyAlias")
+            keyPassword = personalSigning.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("personal")
         }
     }
 }
@@ -47,3 +62,5 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies { implementation("androidx.work:work-runtime:2.12.0") }

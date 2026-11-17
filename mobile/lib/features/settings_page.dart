@@ -6,6 +6,7 @@ import '../data/task.dart';
 import '../ui/read_status.dart';
 import '../ui/service_actions.dart';
 import '../ui/task_widgets.dart';
+import '../ui/background_settings.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
@@ -123,8 +124,10 @@ class SettingsPage extends StatelessWidget {
                 child: const Text('从 Todo 服务刷新'),
               ),
               const SizedBox(height: 16),
+              if (store.background case final background?)
+                BackgroundSettings(background: background),
               Text(
-                '前台每 30 秒读取一次，后台暂停。后台同步与消息提醒将在 A6 提供。',
+                '前台每 30 秒读取一次；后台由系统调度，执行时间受系统限制。',
                 style: p.AppTextStyle.footnote.of(context),
               ),
               const SizedBox(height: 16),

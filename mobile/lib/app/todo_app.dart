@@ -9,6 +9,8 @@ import '../data/remote_tasks.dart';
 import '../features/login_page.dart';
 import '../ui/task_widgets.dart';
 import '../features/home_shell.dart';
+import '../features/task_detail.dart';
+import '../ui/todo_motion.dart';
 import '../ui/todo_localizations.dart';
 
 class TodoApp extends StatefulWidget {
@@ -35,6 +37,7 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
     );
     _store.addListener(_authChanged);
+    _store.background?.addListener(_openNotification);
     unawaited(_store.initialize());
   }
 
@@ -47,13 +50,39 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
       });
     }
     _wasAuthenticated = _store.authenticated;
+    _openNotification();
+  }
+
+  bool _openingNotification = false;
+  void _openNotification() {
+    if (_openingNotification || !_store.ready || !_store.authenticated) return;
+    final background = _store.background;
+    if (background?.pendingTap == null) return;
+    final tap = background!.takeTap()!;
+    if (tap['origin'] != _store.origin || tap['id'] is! int) return;
+    _openingNotification = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _store.resume();
+      if (mounted && _store.authenticated && tap['origin'] == _store.origin) {
+        final context = _navigator.currentContext;
+        if (context != null && context.mounted) {
+          _navigator.currentState?.push(
+            todoPageRoute<void>(
+              context,
+              (_) => TaskDetail(store: _store, id: tap['id'] as int),
+            ),
+          );
+        }
+      }
+      _openingNotification = false;
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _store.setForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.resumed && _store.authenticated) {
-      unawaited(_store.refresh());
+      unawaited(_store.resume());
     }
   }
 
@@ -76,6 +105,7 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _store.removeListener(_authChanged);
+    _store.background?.removeListener(_openNotification);
     _store.dispose();
     super.dispose();
   }
