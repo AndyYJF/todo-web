@@ -60,8 +60,17 @@ class _HomeShellState extends State<HomeShell> {
                 icon: const GlyphIcon(TodoGlyphs.today),
                 tooltip: '切换明暗主题',
               ),
+              if (_selected != 3)
+                p.IconButton.filled(
+                  onPressed:
+                      widget.store.writing || widget.store.pending != null
+                      ? null
+                      : () => openTaskEditor(context, widget.store),
+                  icon: const GlyphIcon(TodoGlyphs.add),
+                  tooltip: '新建任务',
+                ),
               p.IconButton(
-                onPressed: widget.store.refreshing
+                onPressed: widget.store.refreshing || widget.store.writing
                     ? null
                     : () => widget.store.refresh(),
                 icon: widget.store.refreshing
@@ -175,6 +184,44 @@ class _HomeShellState extends State<HomeShell> {
             child: ReadStatus(store: widget.store),
           ),
           const SizedBox(height: 18),
+          if (widget.store.activeDraft case final draft?) ...[
+            p.Card(
+              inert: true,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('有未提交的草稿', style: p.AppTextStyle.headline.of(context)),
+                  const SizedBox(height: 8),
+                  Text(
+                    draft.values['title'].toString().isEmpty
+                        ? '未命名任务'
+                        : draft.values['title'].toString(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  p.TextButton(
+                    onPressed: widget.store.writing
+                        ? null
+                        : () => openTaskEditor(
+                            context,
+                            widget.store,
+                            resumeDraft: draft,
+                          ),
+                    child: const Text('继续草稿'),
+                  ),
+                  p.TextButton(
+                    onPressed:
+                        widget.store.writing || widget.store.pending != null
+                        ? null
+                        : () => widget.store.saveDraft(null),
+                    child: const Text('丢弃草稿'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           ...children,
         ],
       ),
@@ -500,7 +547,7 @@ class _HomeShellState extends State<HomeShell> {
             ),
             const SizedBox(height: 10),
             Text(
-              '当前阶段可读取真实任务。新建、编辑和完成操作将在 A3 接入。',
+              '任务与网页共用服务端数据。前台每30秒刷新，后台不轮询。',
               style: p.AppTextStyle.callout
                   .of(context)
                   .copyWith(color: colors.onSurfaceVariant),
@@ -620,7 +667,9 @@ class _HomeShellState extends State<HomeShell> {
   Widget _tile(TodoTask task) => TaskTile(
     key: ValueKey(task.id),
     task: task,
-    onToggle: null,
+    onToggle: widget.store.canWrite
+        ? () => widget.store.patchTask(task.id, {'done': !task.done})
+        : null,
     onOpen: () => Navigator.of(context).push(
       todoPageRoute<void>(
         context,

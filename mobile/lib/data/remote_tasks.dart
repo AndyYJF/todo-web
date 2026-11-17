@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'local_state.dart';
 import 'task.dart';
+import 'task_write.dart';
 import 'todo_api.dart';
 
 class RemoteTaskStore extends ChangeNotifier {
@@ -22,7 +23,53 @@ class RemoteTaskStore extends ChangeNotifier {
   CampusStatus? campus;
   List<TodoTask> _tasks = [];
   List<String> _projects = [];
-  int _generation = 0;
+  int _generation = 0, _writeGeneration = 0, _readRequest = 0;
+  bool writing = false, _foreground = false;
+  Timer? _poll;
+  TaskDraft? draft;
+  PendingWrite? pending;
+  String? writeError, lastCompletedDraftKey;
+  TaskDraft? get activeDraft => draft?.origin == origin ? draft : null;
+  bool get canWrite =>
+      authenticated &&
+      readAt != null &&
+      !cached &&
+      !writing &&
+      pending == null &&
+      !_disposed;
+  List<TodoTask> get createCandidates {
+    final operation = pending;
+    if (operation == null ||
+        operation.origin != origin ||
+        operation.kind != WriteKind.create ||
+        cached ||
+        readAt == null ||
+        readAt!.isBefore(operation.sentAt)) {
+      return [];
+    }
+    return _tasks
+        .where(
+          (t) => !operation.beforeIds.contains(t.id) && operation.matches(t),
+        )
+        .toList();
+  }
+
+  void setForeground(bool value) {
+    _foreground = value;
+    _syncPolling();
+  }
+
+  void _syncPolling() {
+    if (_foreground && ready && authenticated && !_disposed) {
+      _poll ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        if (!writing) unawaited(refresh());
+      });
+    } else {
+      _poll?.cancel();
+      _poll = null;
+    }
+  }
+
   Future<void>? _inFlight;
   bool _disposed = false;
   String get origin => _api.origin.toString();
@@ -53,6 +100,16 @@ class RemoteTaskStore extends ChangeNotifier {
         _api = TodoApi(site);
         if (['system', 'light', 'dark'].contains(state['theme'])) {
           theme = state['theme'] as String;
+        }
+        if (state['draft'] != null) {
+          draft = TaskDraft.fromJson(
+            Map<String, dynamic>.from(state['draft'] as Map),
+          );
+        }
+        if (state['pending'] != null) {
+          pending = PendingWrite.fromJson(
+            Map<String, dynamic>.from(state['pending'] as Map),
+          );
         }
         final sessionJson = state['session'];
         if (sessionJson != null) {
@@ -96,6 +153,7 @@ class RemoteTaskStore extends ChangeNotifier {
       error = '本地会话或缓存无法读取，请重新登录';
     }
     ready = true;
+    _syncPolling();
     _notify();
     if (authenticated) {
       unawaited(refresh());
@@ -113,11 +171,13 @@ class RemoteTaskStore extends ChangeNotifier {
     campusReadError = null;
   }
 
-  Future<void> _persist() async {
+  Future<bool> _persist() async {
     final state = <String, dynamic>{
       'schema': 1,
       'origin': origin,
       'theme': theme,
+      'draft': draft?.toJson(),
+      'pending': pending?.toJson(),
       'session': authenticated ? _api.session?.toJson() : null,
       'snapshot': authenticated && readAt != null
           ? {
@@ -132,10 +192,13 @@ class RemoteTaskStore extends ChangeNotifier {
     try {
       await storage.save(state);
       storageError = null;
+      _notify();
+      return true;
     } catch (_) {
       storageError = '本机保存失败，重启后可能需要重新登录';
+      _notify();
+      return false;
     }
-    _notify();
   }
 
   Future<bool> login(String server, String password) async {
@@ -150,7 +213,9 @@ class RemoteTaskStore extends ChangeNotifier {
     }
     final generation = ++_generation;
     signingIn = true;
+    writing = false;
     authenticated = false;
+    _syncPolling();
     refreshing = false;
     _inFlight = null;
     _clearSnapshot();
@@ -158,12 +223,14 @@ class RemoteTaskStore extends ChangeNotifier {
     _api.close();
     final api = TodoApi(site);
     _api = api;
+    if (draft?.origin != origin) draft = null;
     _notify();
     await _persist();
     try {
       await api.login(password);
       if (generation != _generation || _disposed) return false;
       authenticated = true;
+      _syncPolling();
       await _persist();
       unawaited(refresh());
       return true;
@@ -179,8 +246,13 @@ class RemoteTaskStore extends ChangeNotifier {
   }
 
   Future<void> refresh() {
-    if (!authenticated || _disposed) return Future.value();
-    return _inFlight ??= _read(_generation, _api);
+    if (!authenticated || _disposed || writing) return Future.value();
+    return _inFlight ??= _read(
+      _generation,
+      _writeGeneration,
+      ++_readRequest,
+      _api,
+    );
   }
 
   Future<(T?, Object?)> _readResult<T>(Future<T> read) async {
@@ -191,7 +263,13 @@ class RemoteTaskStore extends ChangeNotifier {
     }
   }
 
-  Future<void> _read(int generation, TodoApi api) async {
+  bool _currentRead(int auth, int write, int request) =>
+      auth == _generation &&
+      write == _writeGeneration &&
+      request == _readRequest &&
+      !writing &&
+      !_disposed;
+  Future<void> _read(int auth, int write, int request, TodoApi api) async {
     refreshing = true;
     _notify();
     try {
@@ -201,7 +279,7 @@ class RemoteTaskStore extends ChangeNotifier {
       final taskResult = await taskFuture;
       final projectResult = await projectFuture;
       final campusResult = await campusFuture;
-      if (generation != _generation || _disposed) return;
+      if (!_currentRead(auth, write, request)) return;
       final failures = [taskResult.$2, projectResult.$2, campusResult.$2];
       if (failures.any((e) => e is ApiFailure && e.unauthorized)) {
         await _expire();
@@ -224,9 +302,10 @@ class RemoteTaskStore extends ChangeNotifier {
       readAt = DateTime.now().toUtc();
       cached = false;
       error = projectResult.$2 == null ? null : '任务已更新，项目列表读取失败';
+      _reconcilePending();
       await _persist();
     } catch (e) {
-      if (generation == _generation && !_disposed) {
+      if (_currentRead(auth, write, request)) {
         if (e is ApiFailure && e.unauthorized) {
           await _expire();
         } else {
@@ -235,12 +314,215 @@ class RemoteTaskStore extends ChangeNotifier {
         }
       }
     } finally {
-      if (generation == _generation) {
+      if (auth == _generation && request == _readRequest) {
         refreshing = false;
         _inFlight = null;
         _notify();
       }
     }
+  }
+
+  Future<void> saveDraft(TaskDraft? value) async {
+    if (value != null && value.origin != origin) return;
+    draft = value?.hasChanges == true ? value : null;
+    _notify();
+    await _persist();
+  }
+
+  Future<TodoTask?> loadTaskForEdit(int id) async {
+    final auth = _generation, write = _writeGeneration;
+    try {
+      final result = await _api.task(id);
+      if (auth != _generation || write != _writeGeneration || _disposed) {
+        throw const ApiFailure('会话或任务状态已变化，请重新打开编辑');
+      }
+      return result;
+    } on ApiFailure catch (e) {
+      if (auth == _generation && e.unauthorized) await _expire();
+      rethrow;
+    }
+  }
+
+  void _completePending(PendingWrite operation) {
+    if (operation.draftKey != null) {
+      lastCompletedDraftKey = operation.draftKey;
+      if (draft?.key == operation.draftKey) draft = null;
+    }
+    if (identical(pending, operation)) pending = null;
+    writeError = null;
+  }
+
+  void _reconcilePending() {
+    final operation = pending;
+    if (operation == null ||
+        operation.origin != origin ||
+        readAt == null ||
+        readAt!.isBefore(operation.sentAt)) {
+      return;
+    }
+    var resolved =
+        operation.kind == WriteKind.delete && task(operation.taskId!) == null;
+    if (operation.kind == WriteKind.patch) {
+      final current = task(operation.taskId!);
+      resolved = current != null && operation.matches(current);
+    }
+    if (resolved) _completePending(operation);
+  }
+
+  Future<bool> confirmCreated(int id) async {
+    final operation = pending;
+    if (operation == null || !createCandidates.any((t) => t.id == id)) {
+      return false;
+    }
+    _completePending(operation);
+    _notify();
+    await _persist();
+    return true;
+  }
+
+  Future<void> abandonPending() async {
+    if (writing) return;
+    pending = null;
+    writeError = null;
+    _notify();
+    await _persist();
+  }
+
+  Future<WriteOutcome> createTask(
+    Map<String, dynamic> input, {
+    String? draftKey,
+  }) => _mutate(WriteKind.create, null, input, draftKey: draftKey);
+  Future<WriteOutcome> patchTask(
+    int id,
+    Map<String, dynamic> patch, {
+    String? draftKey,
+  }) => _mutate(WriteKind.patch, id, patch, draftKey: draftKey);
+  Future<WriteOutcome> deleteTask(int id) =>
+      _mutate(WriteKind.delete, id, const {});
+  Future<WriteOutcome> _mutate(
+    WriteKind kind,
+    int? id,
+    Map<String, dynamic> fields, {
+    String? draftKey,
+  }) async {
+    if (!canWrite) {
+      final message = !authenticated
+          ? '请先登录，草稿已保留'
+          : pending != null
+          ? '请先核对上一笔待确认提交'
+          : writing
+          ? '正在提交，请勿重复操作'
+          : readAt == null
+          ? '尚未取得服务端快照，请联网刷新后提交'
+          : '当前为缓存，请联网刷新后再提交';
+      writeError = message;
+      _notify();
+      return WriteOutcome(WriteState.rejected, message);
+    }
+    final auth = _generation, api = _api;
+    writing = true;
+    writeError = null;
+    ++_writeGeneration;
+    ++_readRequest;
+    _inFlight = null;
+    refreshing = false;
+    final operation = PendingWrite(
+      origin: origin,
+      kind: kind,
+      taskId: id,
+      payload: Map.unmodifiable(fields),
+      beforeIds: _tasks.map((t) => t.id).toSet(),
+      sentAt: DateTime.now().toUtc(),
+      draftKey: draftKey,
+    );
+    pending = operation;
+    _notify();
+    if (!await _persist() || auth != _generation || _disposed) {
+      if (identical(pending, operation)) pending = null;
+      if (auth == _generation) {
+        writing = false;
+        ++_writeGeneration;
+      }
+      _notify();
+      await _persist();
+      return const WriteOutcome(
+        WriteState.rejected,
+        '提交尚未发出，本机记录或会话状态发生变化，草稿已保留',
+      );
+    }
+    WriteOutcome outcome;
+    try {
+      TodoTask? saved;
+      switch (kind) {
+        case WriteKind.create:
+          saved = await api.createTask(fields);
+        case WriteKind.patch:
+          saved = fields.isEmpty ? task(id!) : await api.patchTask(id!, fields);
+        case WriteKind.delete:
+          await api.deleteTask(id!);
+      }
+      if (auth != _generation || _disposed) {
+        return const WriteOutcome(WriteState.pending, '会话已变化，请重新登录后核对提交结果');
+      }
+      if (kind == WriteKind.delete) {
+        _tasks = _tasks.where((t) => t.id != id).toList();
+      } else if (saved != null) {
+        _tasks = [saved, ..._tasks.where((t) => t.id != saved!.id)];
+      }
+      _completePending(operation);
+      outcome = WriteOutcome(
+        WriteState.confirmed,
+        kind == WriteKind.delete ? '已删除' : '已保存',
+        task: saved,
+      );
+    } on ApiFailure catch (e) {
+      if (auth != _generation || _disposed) {
+        return const WriteOutcome(WriteState.pending, '会话已变化，请重新登录后核对提交结果');
+      }
+      if (e.unauthorized) {
+        pending = null;
+        writeError = e.message;
+        await _expire();
+        return WriteOutcome(WriteState.rejected, e.message);
+      }
+      if (e.statusCode == 404 && kind == WriteKind.delete) {
+        _tasks = _tasks.where((t) => t.id != id).toList();
+        _completePending(operation);
+        outcome = const WriteOutcome(WriteState.confirmed, '服务端任务已不存在');
+      } else {
+        if (!e.uncertain) pending = null;
+        if (e.statusCode == 404) {
+          _tasks = _tasks.where((t) => t.id != id).toList();
+        }
+        writeError = e.statusCode == 404 ? '任务已在其他端删除，草稿已保留，不会自动重建' : e.message;
+        outcome = WriteOutcome(
+          e.uncertain ? WriteState.pending : WriteState.rejected,
+          writeError!,
+        );
+      }
+    } catch (_) {
+      writeError = '提交响应无法确认，请重新读取核对，勿重复提交';
+      outcome = WriteOutcome(WriteState.pending, writeError!);
+    } finally {
+      if (auth == _generation) {
+        writing = false;
+        ++_writeGeneration;
+        ++_readRequest;
+        _inFlight = null;
+        refreshing = false;
+        _notify();
+        await _persist();
+      }
+    }
+    if (auth == _generation && authenticated) await refresh();
+    if (outcome.state == WriteState.pending && pending == null) {
+      return WriteOutcome(
+        WriteState.confirmed,
+        '已核对服务端当前状态',
+        task: id == null ? null : task(id),
+      );
+    }
+    return outcome;
   }
 
   String _message(Object error) =>
@@ -250,6 +532,8 @@ class RemoteTaskStore extends ChangeNotifier {
     _inFlight = null;
     refreshing = false;
     authenticated = false;
+    writing = false;
+    _syncPolling();
     _api.session = null;
     _clearSnapshot();
     error = '会话已失效，请重新登录';
@@ -263,7 +547,9 @@ class RemoteTaskStore extends ChangeNotifier {
     _inFlight = null;
     refreshing = false;
     signingIn = false;
+    writing = false;
     authenticated = false;
+    _syncPolling();
     _clearSnapshot();
     error = null;
     _api = TodoApi(oldApi.origin);
@@ -290,6 +576,7 @@ class RemoteTaskStore extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _poll?.cancel();
     ++_generation;
     _api.close();
     super.dispose();

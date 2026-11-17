@@ -1,24 +1,84 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart' as p;
 import 'package:prism_ui/icons/icons.dart';
 
-import '../data/demo_tasks.dart';
 import '../data/task.dart';
+import '../data/task_write.dart';
 import '../data/remote_tasks.dart';
+import '../data/todo_api.dart';
 import '../ui/read_status.dart';
+import '../ui/write_notice.dart';
 import '../ui/task_widgets.dart';
 import '../ui/todo_motion.dart';
 import '../ui/todo_glyphs.dart';
 
 Future<void> openTaskEditor(
   BuildContext context,
-  DemoTaskStore store, {
+  RemoteTaskStore store, {
   TodoTask? task,
-}) => showTodoFormSheet<void>(
-  context: context,
-  props: const p.SheetProps(detents: [0.7, 0.94]),
-  builder: (_) => TaskEditor(store: store, task: task),
-);
+  TaskDraft? resumeDraft,
+}) async {
+  var chosen = resumeDraft;
+  final existing = store.activeDraft;
+  if (chosen == null && existing != null && existing.taskId != task?.id) {
+    final discard = await showTodoFormSheet<bool>(
+      context: context,
+      builder: (context) => p.PrismScaffold(
+        bar: todoBar(
+          context,
+          '有未保存的草稿',
+          actions: [
+            p.TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+        body: Builder(
+          builder: (context) => Padding(
+            padding: EdgeInsets.fromLTRB(24, context.appBarInset + 20, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('可以继续原草稿，或丢弃草稿后打开当前任务。'),
+                const SizedBox(height: 20),
+                p.FilledButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('继续原草稿'),
+                ),
+                p.TextButton(
+                  onPressed: store.pending != null
+                      ? null
+                      : () => Navigator.of(context).pop(true),
+                  child: const Text('丢弃草稿并继续'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (discard == null || !context.mounted) return;
+    if (discard) {
+      await store.saveDraft(null);
+    } else {
+      chosen = existing;
+    }
+  }
+  if (!context.mounted) return;
+  chosen ??= store.activeDraft?.taskId == task?.id ? store.activeDraft : null;
+  final resuming = chosen != null;
+  chosen ??= TaskDraft.open(store.origin, task);
+  await showTodoFormSheet<void>(
+    context: context,
+    props: const p.SheetProps(detents: [.7, .94]),
+    builder: (_) =>
+        TaskEditor(store: store, draft: chosen!, resuming: resuming),
+  );
+}
 
 class TaskDetail extends StatelessWidget {
   const TaskDetail({super.key, required this.store, required this.id});
@@ -30,7 +90,21 @@ class TaskDetail extends StatelessWidget {
     builder: (context, _) {
       final task = store.task(id);
       return p.PrismScaffold(
-        bar: todoBar(context, '任务详情', back: true),
+        bar: todoBar(
+          context,
+          '任务详情',
+          back: true,
+          actions: [
+            if (task != null)
+              p.IconButton(
+                onPressed: store.writing
+                    ? null
+                    : () => openTaskEditor(context, store, task: task),
+                icon: const GlyphIcon(TodoGlyphs.edit),
+                tooltip: '编辑任务',
+              ),
+          ],
+        ),
         body: Builder(
           builder: (context) => ListView(
             padding: EdgeInsets.fromLTRB(
@@ -59,7 +133,19 @@ class TaskDetail extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 18),
-                      StatusPill(label: task.done ? '已完成' : '待处理'),
+                      Row(
+                        children: [
+                          p.Checkbox(
+                            value: task.done,
+                            isCircle: true,
+                            onChanged: store.canWrite
+                                ? (value) =>
+                                      store.patchTask(id, {'done': value})
+                                : null,
+                          ),
+                          Text(task.done ? '已完成' : '待处理'),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -89,7 +175,13 @@ class TaskDetail extends StatelessWidget {
                       p.ListRow(
                         leading: const GlyphIcon(Glyphs.pin),
                         title: const Text('置顶'),
-                        trailing: Text(task.pinned ? '是' : '否'),
+                        trailing: p.Switch(
+                          value: task.pinned,
+                          onChanged: store.canWrite
+                              ? (value) =>
+                                    store.patchTask(id, {'pinned': value})
+                              : null,
+                        ),
                       ),
                       p.ListRow(
                         title: const Text('来源'),
@@ -110,9 +202,20 @@ class TaskDetail extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 24),
-                Text(
-                  'A2 为只读预览，修改操作将在 A3 接入。',
-                  style: p.AppTextStyle.footnote.of(context),
+                p.TextButton.icon(
+                  onPressed: store.canWrite
+                      ? () => _delete(context, task)
+                      : null,
+                  icon: GlyphIcon(
+                    TodoGlyphs.trash,
+                    color: p.Theme.of(context).colorScheme.error,
+                  ),
+                  label: Text(
+                    '删除任务',
+                    style: TextStyle(
+                      color: p.Theme.of(context).colorScheme.error,
+                    ),
+                  ),
                 ),
               ],
             ],
@@ -121,170 +224,412 @@ class TaskDetail extends StatelessWidget {
       );
     },
   );
+  Future<void> _delete(BuildContext context, TodoTask task) async {
+    final confirmed = await showTodoFormSheet<bool>(
+      context: context,
+      builder: (context) => p.PrismScaffold(
+        bar: todoBar(
+          context,
+          '删除任务',
+          actions: [
+            p.TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+        body: Builder(
+          builder: (context) => Padding(
+            padding: EdgeInsets.fromLTRB(24, context.appBarInset + 24, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('确认从服务端删除这条任务？此操作无法撤销。'),
+                const SizedBox(height: 12),
+                Text(task.title),
+                const SizedBox(height: 24),
+                p.FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  style: p.ButtonStyle.from(
+                    backgroundColor: p.Theme.of(context).colorScheme.error,
+                  ),
+                  child: const Text('确认删除'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    final outcome = await store.deleteTask(id);
+    if (outcome.succeeded && context.mounted) Navigator.of(context).pop();
+  }
 }
 
 class TaskEditor extends StatefulWidget {
-  const TaskEditor({super.key, required this.store, this.task});
-  final DemoTaskStore store;
-  final TodoTask? task;
+  const TaskEditor({
+    super.key,
+    required this.store,
+    required this.draft,
+    required this.resuming,
+  });
+  final RemoteTaskStore store;
+  final TaskDraft draft;
+  final bool resuming;
   @override
   State<TaskEditor> createState() => _TaskEditorState();
 }
 
 class _TaskEditorState extends State<TaskEditor> {
-  late final TextEditingController _title = TextEditingController(
-    text: widget.task?.title ?? '',
-  );
-  late final TextEditingController _note = TextEditingController(
-    text: widget.task?.note ?? '',
-  );
-  late final TextEditingController _project = TextEditingController(
-    text: widget.task?.project ?? '',
-  );
-  late String _priority = widget.task?.priority ?? 'normal';
-  late DateTime? _due = widget.task?.dueAt;
+  final _title = TextEditingController(),
+      _note = TextEditingController(),
+      _project = TextEditingController(),
+      _start = TextEditingController(),
+      _due = TextEditingController();
+  late TaskDraft _draft;
+  String _priority = 'normal';
+  bool _quick = false,
+      _pinned = false,
+      _loading = false,
+      _fresh = true,
+      _missing = false,
+      _closing = false,
+      _touched = false;
+  String? _error;
+  Timer? _debounce;
+  RemoteTaskStore get store => widget.store;
+  bool get _locked => store.writing || store.pending != null;
+  bool get _canSave =>
+      !_loading &&
+      _fresh &&
+      !_missing &&
+      !_locked &&
+      store.canWrite &&
+      _title.text.trim().isNotEmpty;
   @override
   void initState() {
     super.initState();
-    _title.addListener(_changed);
+    _draft = widget.draft;
+    _apply(_draft);
+    for (final controller in [_title, _note, _project, _start, _due]) {
+      controller.addListener(_changed);
+    }
+    store.addListener(_storeChanged);
+    if (_draft.taskId != null) unawaited(_load());
   }
 
-  void _changed() => setState(() {});
+  void _apply(TaskDraft draft) {
+    _title.text = draft.values['title'] as String;
+    _note.text = draft.values['note'] as String;
+    _project.text = draft.values['project'] as String;
+    _start.text = draft.values['startAt'] as String? ?? '';
+    _due.text = draft.values['dueAt'] as String? ?? '';
+    _priority = draft.values['priority'] as String;
+    _quick = draft.values['quick'] as bool;
+    _pinned = draft.values['pinned'] as bool;
+  }
+
+  TaskDraft _current() => _draft.withValues({
+    'title': _title.text,
+    'note': _note.text,
+    'project': _project.text,
+    'priority': _priority,
+    'startAt': _start.text.trim().isEmpty ? null : _start.text,
+    'dueAt': _due.text.trim().isEmpty ? null : _due.text,
+    'quick': _quick,
+    'pinned': _pinned,
+  });
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final task = await store.loadTaskForEdit(_draft.taskId!);
+      if (!mounted) return;
+      if (task == null) {
+        _missing = true;
+        _fresh = false;
+        _error = '任务已在其他端删除。草稿保留，不会自动重建。';
+      } else {
+        _missing = false;
+        _fresh = true;
+        _error = null;
+        if (!widget.resuming && !_touched) {
+          _draft = TaskDraft.open(store.origin, task);
+          _apply(_draft);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        _fresh = false;
+        _error = e is ApiFailure ? e.message : '暂时无法核对服务端任务，草稿已保留';
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _changed() {
+    if (_loading || _closing) return;
+    _touched = true;
+    setState(() => _error = null);
+    _debounce?.cancel();
+    _debounce = Timer(
+      const Duration(milliseconds: 350),
+      () => store.saveDraft(_current()),
+    );
+  }
+
+  void _storeChanged() {
+    if (store.lastCompletedDraftKey == _draft.key) _finish();
+  }
+
+  void _finish() {
+    if (_closing || !mounted) return;
+    _closing = true;
+    _debounce?.cancel();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
   @override
   void dispose() {
-    _title.removeListener(_changed);
-    _title.dispose();
-    _note.dispose();
-    _project.dispose();
+    _debounce?.cancel();
+    store.removeListener(_storeChanged);
+    if (!_closing) {
+      final current = _current();
+      scheduleMicrotask(() => store.saveDraft(current));
+    }
+    for (final controller in [_title, _note, _project, _start, _due]) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
+  Future<void> _save() async {
+    if (!_canSave) return;
+    _debounce?.cancel();
+    final draft = _current();
+    Map<String, dynamic> fields;
+    try {
+      fields = draft.payload();
+    } on FormatException catch (e) {
+      setState(() => _error = e.message);
+      return;
+    }
+    await store.saveDraft(draft);
+    if (draft.taskId != null && fields.isEmpty) {
+      await store.saveDraft(null);
+      _finish();
+      return;
+    }
+    final outcome = draft.taskId == null
+        ? await store.createTask(fields, draftKey: draft.key)
+        : await store.patchTask(draft.taskId!, fields, draftKey: draft.key);
+    if (!mounted) return;
+    if (outcome.succeeded) {
+      _finish();
+    } else {
+      setState(() => _error = outcome.message);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => p.PrismScaffold(
-    resizeToAvoidBottomInset: true,
-    bar: todoBar(
-      context,
-      widget.task == null ? '新建任务' : '编辑任务',
-      actions: [
-        p.TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        p.IconButton.filled(
-          onPressed: _title.text.trim().isEmpty ? null : _save,
-          icon: const GlyphIcon(Glyphs.check),
-          tooltip: '保存任务',
-        ),
-      ],
-    ),
-    body: Builder(
-      builder: (context) => SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(20, context.appBarInset + 14, 20, 28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Align(alignment: Alignment.centerLeft, child: DemoBadge()),
-            const SectionHeading('想完成什么？'),
-            p.TextField(
-              controller: _title,
-              maxLines: 2,
-              maxLength: 120,
-              decoration: const p.InputDecoration(hintText: '写下一个清晰的小目标'),
-            ),
-            const SectionHeading('补充说明'),
-            p.TextField(
-              controller: _note,
-              minLines: 3,
-              maxLines: 5,
-              decoration: const p.InputDecoration(hintText: '备注、步骤，或一个想法'),
-            ),
-            const SectionHeading('安排'),
-            p.Card(
-              onPressed: _pickDate,
-              padding: EdgeInsets.zero,
-              child: p.ListRow(
-                leading: const GlyphIcon(TodoGlyphs.calendar),
-                title: const Text('截止时间'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: store,
+    builder: (context, _) => p.PrismScaffold(
+      bar: todoBar(
+        context,
+        _draft.taskId == null ? '新建任务' : '编辑任务',
+        actions: [
+          p.TextButton(
+            onPressed: store.writing ? null : () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+          p.IconButton.filled(
+            onPressed: _canSave ? _save : null,
+            icon: store.writing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: p.ActivityIndicator(),
+                  )
+                : const GlyphIcon(Glyphs.check),
+            tooltip: '保存任务',
+          ),
+        ],
+      ),
+      body: Builder(
+        builder: (context) => SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(20, context.appBarInset + 14, 20, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('草稿自动保存在本机；保存后提交到服务端。'),
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: p.ActivityIndicator()),
+                ),
+              if (store.cached)
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text('当前为缓存，可继续填写草稿，联网刷新后再提交。'),
+                ),
+              if (store.readAt == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text('尚未取得服务端数据，联网刷新后可提交。'),
+                ),
+              if (store.cached || store.readAt == null)
+                p.TextButton(
+                  onPressed: store.refreshing || store.writing
+                      ? null
+                      : () => store.refresh(),
+                  child: const Text('重新读取服务端'),
+                ),
+              WriteNotice(store: store),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: p.Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              if (!_fresh && !_missing && !_loading)
+                p.TextButton(onPressed: _load, child: const Text('重新核对服务端任务')),
+              const SectionHeading('想完成什么？'),
+              p.TextField(
+                controller: _title,
+                enabled: !_locked && !_loading,
+                maxLines: 2,
+                maxLength: 120,
+                decoration: const p.InputDecoration(hintText: '写下一个清晰的小目标'),
+              ),
+              const SectionHeading('补充说明'),
+              p.TextField(
+                controller: _note,
+                enabled: !_locked && !_loading,
+                minLines: 3,
+                maxLines: 5,
+                decoration: const p.InputDecoration(hintText: '备注、步骤，或一个想法'),
+              ),
+              const SectionHeading('安排'),
+              const Text('时间按 UTC+8 填写，格式为 年-月-日 时:分；留空表示不设置。'),
+              const SizedBox(height: 12),
+              p.TextField(
+                controller: _start,
+                enabled: !_locked && !_loading,
+                decoration: const p.InputDecoration(
+                  hintText: '开始时间，例如 2026-11-18 09:00',
+                ),
+              ),
+              const SizedBox(height: 12),
+              p.TextField(
+                controller: _due,
+                enabled: !_locked && !_loading,
+                decoration: const p.InputDecoration(
+                  hintText: '截止时间，例如 2026-11-18 18:00',
+                ),
+              ),
+              p.TextButton(
+                onPressed: _locked || _loading ? null : _pickDate,
+                child: const Text('快捷安排截止时间'),
+              ),
+              p.TextField(
+                controller: _project,
+                enabled: !_locked && !_loading,
+                decoration: const p.InputDecoration(hintText: '项目，例如：学习、个人'),
+              ),
+              const SectionHeading('优先级'),
+              IgnorePointer(
+                ignoring: _locked || _loading,
+                child: p.SegmentedControl<String>(
+                  key: MediaQuery.disableAnimationsOf(context)
+                      ? ValueKey(_priority)
+                      : null,
+                  segments: const [
+                    ('low', '低'),
+                    ('normal', '普通'),
+                    ('high', '高'),
+                  ],
+                  value: _priority,
+                  onChanged: (value) {
+                    setState(() => _priority = value);
+                    _changed();
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+              p.Card(
+                inert: true,
+                padding: EdgeInsets.zero,
+                child: Column(
                   children: [
-                    Text(dueLabel(_due)),
-                    const SizedBox(width: 8),
-                    const GlyphIcon(Glyphs.chevronForward, size: 16),
+                    p.ListRow(
+                      title: const Text('置顶'),
+                      trailing: p.Switch(
+                        value: _pinned,
+                        onChanged: _locked || _loading
+                            ? null
+                            : (value) {
+                                setState(() => _pinned = value);
+                                _changed();
+                              },
+                      ),
+                    ),
+                    p.ListRow(
+                      title: const Text('快速任务'),
+                      trailing: p.Switch(
+                        value: _quick,
+                        onChanged: _locked || _loading
+                            ? null
+                            : (value) {
+                                setState(() => _quick = value);
+                                _changed();
+                              },
+                      ),
+                    ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            p.TextField(
-              controller: _project,
-              decoration: const p.InputDecoration(hintText: '项目，例如：学习、个人'),
-            ),
-            const SectionHeading('优先级'),
-            p.SegmentedControl<String>(
-              key: MediaQuery.disableAnimationsOf(context)
-                  ? ValueKey(_priority)
-                  : null,
-              segments: const [('low', '低'), ('normal', '普通'), ('high', '高')],
-              value: _priority,
-              onChanged: (value) => setState(() => _priority = value),
-            ),
-            const SizedBox(height: 24),
-            p.FilledButton(
-              onPressed: _title.text.trim().isEmpty ? null : _save,
-              child: const Text('保存演示任务'),
-            ),
-          ],
+              const SizedBox(height: 24),
+              p.FilledButton(
+                onPressed: _canSave ? _save : null,
+                child: Text(store.writing ? '正在提交' : '保存任务'),
+              ),
+            ],
+          ),
         ),
       ),
     ),
   );
-
-  void _save() {
-    final title = _title.text.trim();
-    if (title.isEmpty) return;
-    final original = widget.task;
-    if (original == null) {
-      widget.store.add(
-        title: title,
-        note: _note.text.trim(),
-        project: _project.text.trim(),
-        priority: _priority,
-        dueAt: _due,
-      );
-    } else {
-      widget.store.save(
-        original.copyWith(
-          title: title,
-          note: _note.text.trim(),
-          project: _project.text.trim(),
-          priority: _priority,
-          dueAt: _due,
-          clearDue: _due == null,
-        ),
-      );
-    }
-    Navigator.of(context).pop();
-  }
-
   Future<void> _pickDate() async {
-    final now = businessNow();
-    final day = DateTime.utc(now.year, now.month, now.day);
+    final now = businessNow(),
+        day = DateTime.utc(
+          businessNow().year,
+          businessNow().month,
+          businessNow().day,
+        );
     final options = <(String, DateTime?)>[
       ('不设日期', null),
-      ('今天 20:00', day.add(const Duration(hours: 20))),
+      ('今天 23:59', DateTime.utc(now.year, now.month, now.day, 23, 59)),
       ('明天 18:00', day.add(const Duration(days: 1, hours: 18))),
       ('一周后 18:00', day.add(const Duration(days: 7, hours: 18))),
     ];
     final picked = await showTodoFormSheet<_DueChoice>(
       context: context,
-      builder: (sheetContext) => p.PrismScaffold(
+      builder: (context) => p.PrismScaffold(
         bar: todoBar(
-          sheetContext,
+          context,
           '安排时间',
           actions: [
             p.IconButton(
-              onPressed: () => Navigator.of(sheetContext).pop(),
+              onPressed: () => Navigator.of(context).pop(),
               icon: const GlyphIcon(Glyphs.close),
               tooltip: '关闭',
             ),
@@ -300,9 +645,8 @@ class _TaskEditorState extends State<TaskEditor> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: p.Card(
                     onPressed: () =>
-                        Navigator.of(sheetContext).pop(_DueChoice(option.$2)),
+                        Navigator.of(context).pop(_DueChoice(option.$2)),
                     child: p.ListRow(
-                      leading: const GlyphIcon(TodoGlyphs.calendar),
                       title: Text(option.$1),
                       trailing: const GlyphIcon(
                         Glyphs.chevronForward,
@@ -316,7 +660,9 @@ class _TaskEditorState extends State<TaskEditor> {
         ),
       ),
     );
-    if (picked != null && mounted) setState(() => _due = picked.value);
+    if (picked != null && mounted) {
+      _due.text = businessDateString(picked.value) ?? '';
+    }
   }
 }
 

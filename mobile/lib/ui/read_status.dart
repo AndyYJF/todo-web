@@ -4,6 +4,7 @@ import 'package:prism_ui/prism_ui.dart' as p;
 import '../data/remote_tasks.dart';
 import '../data/task.dart';
 import 'task_widgets.dart';
+import 'write_notice.dart';
 
 class ReadStatus extends StatelessWidget {
   const ReadStatus({super.key, required this.store});
@@ -16,10 +17,10 @@ class ReadStatus extends StatelessWidget {
       children: [
         StatusPill(
           label: store.refreshing
-              ? '正在读取 · 只读预览'
+              ? '正在读取'
               : store.cached
-              ? '本机缓存 · 只读预览'
-              : '服务端数据 · 只读预览',
+              ? '本机缓存 · 联网刷新后可提交'
+              : '服务端数据',
         ),
         const SizedBox(height: 8),
         Text(
@@ -48,6 +49,7 @@ class ReadStatus extends StatelessWidget {
                   .copyWith(color: colors.error),
             ),
           ),
+        WriteNotice(store: store),
       ],
     );
   }

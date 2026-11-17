@@ -30,9 +30,15 @@ Uri normalizeOrigin(String input, {bool allowLocalHttp = false}) {
 }
 
 class ApiFailure implements Exception {
-  const ApiFailure(this.message, {this.unauthorized = false});
+  const ApiFailure(
+    this.message, {
+    this.unauthorized = false,
+    this.uncertain = false,
+    this.statusCode,
+  });
   final String message;
-  final bool unauthorized;
+  final bool unauthorized, uncertain;
+  final int? statusCode;
   @override
   String toString() => message;
 }
@@ -105,6 +111,7 @@ class TodoApi {
     Object? data,
     Map<String, dynamic>? query,
     bool authenticated = true,
+    bool mutation = false,
   }) async {
     final headers = <String, dynamic>{'Accept': 'application/json'};
     if (authenticated) {
@@ -123,27 +130,45 @@ class TodoApi {
       );
       final status = response.statusCode!;
       if (status >= 300 && status < 400) {
-        throw const ApiFailure('服务地址发生跳转，请核对站点地址');
+        throw ApiFailure('服务地址发生跳转，请核对站点地址', uncertain: mutation);
       }
       if (status == 401) {
         throw ApiFailure(
           authenticated ? '会话已失效，请重新登录' : '密码错误',
           unauthorized: authenticated,
+          statusCode: status,
         );
       }
       if (status < 200 || status >= 300) {
-        throw ApiFailure('服务请求失败（HTTP $status）');
+        throw ApiFailure(
+          '服务请求失败（HTTP $status）',
+          statusCode: status,
+          uncertain: mutation && (status >= 500 || status == 408),
+        );
       }
-      if (response.data is! Map) throw const ApiFailure('服务返回的数据格式不正确');
+      if (response.data is! Map) {
+        throw ApiFailure('服务返回的数据格式不正确', uncertain: mutation);
+      }
       return response;
     } on DioException catch (e) {
-      throw ApiFailure(switch (e.type) {
-        DioExceptionType.connectionTimeout ||
-        DioExceptionType.sendTimeout ||
-        DioExceptionType.receiveTimeout => '连接超时，已保留最近的任务快照',
-        DioExceptionType.badCertificate => '服务器证书校验失败',
-        _ => '无法连接服务，请检查网络或站点地址',
-      });
+      final uncertain =
+          mutation &&
+          ![
+            DioExceptionType.connectionTimeout,
+            DioExceptionType.badCertificate,
+          ].contains(e.type);
+      throw ApiFailure(
+        uncertain
+            ? '提交结果待确认，请先重新读取，避免重复提交'
+            : switch (e.type) {
+                DioExceptionType.connectionTimeout ||
+                DioExceptionType.sendTimeout ||
+                DioExceptionType.receiveTimeout => '连接超时，已保留最近的任务快照',
+                DioExceptionType.badCertificate => '服务器证书校验失败',
+                _ => '无法连接服务，请检查网络或站点地址',
+              },
+        uncertain: uncertain,
+      );
     }
   }
 
@@ -199,6 +224,59 @@ class TodoApi {
     return data['last'] == null
         ? null
         : CampusStatus.fromJson(Map<String, dynamic>.from(data['last'] as Map));
+  }
+
+  TodoTask _taskResponse(Response<dynamic> response, {bool mutation = false}) {
+    try {
+      return TodoTask.fromJson(
+        Map<String, dynamic>.from((response.data as Map)['task'] as Map),
+      );
+    } catch (_) {
+      throw ApiFailure('服务返回的任务无法解析', uncertain: mutation);
+    }
+  }
+
+  Future<TodoTask?> task(int id) async {
+    try {
+      return _taskResponse(await _request('/api/tasks/$id'));
+    } on ApiFailure catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<TodoTask> createTask(Map<String, dynamic> input) async {
+    final response = await _request(
+      '/api/tasks',
+      method: 'POST',
+      data: input,
+      mutation: true,
+    );
+    if (response.statusCode != 201) {
+      throw const ApiFailure('新建响应异常，请先核对结果', uncertain: true);
+    }
+    return _taskResponse(response, mutation: true);
+  }
+
+  Future<TodoTask> patchTask(int id, Map<String, dynamic> patch) async =>
+      _taskResponse(
+        await _request(
+          '/api/tasks/$id',
+          method: 'PATCH',
+          data: patch,
+          mutation: true,
+        ),
+        mutation: true,
+      );
+  Future<void> deleteTask(int id) async {
+    final response = await _request(
+      '/api/tasks/$id',
+      method: 'DELETE',
+      mutation: true,
+    );
+    if ((response.data as Map)['ok'] != true) {
+      throw const ApiFailure('删除响应异常，请先核对结果', uncertain: true);
+    }
   }
 
   Future<void> logout() async {

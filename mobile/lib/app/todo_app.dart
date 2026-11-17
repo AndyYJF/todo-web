@@ -31,6 +31,9 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _store.setForeground(
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+    );
     _store.addListener(_authChanged);
     unawaited(_store.initialize());
   }
@@ -48,6 +51,7 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _store.setForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.resumed && _store.authenticated) {
       unawaited(_store.refresh());
     }

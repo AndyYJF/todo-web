@@ -5,6 +5,7 @@ import 'package:prism_ui/icons/icons.dart';
 
 import '../data/remote_tasks.dart';
 import '../ui/task_widgets.dart';
+import '../ui/write_notice.dart';
 import '../ui/todo_glyphs.dart';
 
 class LoginPage extends StatefulWidget {
@@ -113,7 +114,8 @@ class _LoginPageState extends State<LoginPage> {
                 : const Text('登录'),
           ),
           const SizedBox(height: 22),
-          const StatusPill(label: 'A2 · 真实数据只读预览'),
+          const Text('登录后可读取和更新个人任务。'),
+          WriteNotice(store: widget.store),
         ],
       ),
     ),
