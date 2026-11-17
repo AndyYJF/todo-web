@@ -2,7 +2,9 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart' as p;
 import 'package:prism_ui/icons/icons.dart';
 
-import '../data/demo_tasks.dart';
+import '../data/remote_tasks.dart';
+import '../ui/read_status.dart';
+import '../data/task.dart';
 import '../ui/task_widgets.dart';
 import '../ui/todo_motion.dart';
 import '../ui/todo_glyphs.dart';
@@ -15,7 +17,7 @@ class HomeShell extends StatefulWidget {
     required this.themeMode,
     required this.onThemeChanged,
   });
-  final DemoTaskStore store;
+  final RemoteTaskStore store;
   final p.ThemeMode themeMode;
   final ValueChanged<p.ThemeMode> onThemeChanged;
   @override
@@ -26,6 +28,7 @@ class _HomeShellState extends State<HomeShell> {
   int _selected = 0;
   int _filter = 0;
   String _query = '';
+  bool _pullReady = false;
   final _search = TextEditingController();
   final _bucket = PageStorageBucket();
   static const _titles = ['今天', '任务', '四象限', '更多'];
@@ -57,12 +60,19 @@ class _HomeShellState extends State<HomeShell> {
                 icon: const GlyphIcon(TodoGlyphs.today),
                 tooltip: '切换明暗主题',
               ),
-              if (_selected != 3)
-                p.IconButton.filled(
-                  onPressed: () => openTaskEditor(context, widget.store),
-                  icon: const GlyphIcon(TodoGlyphs.add),
-                  tooltip: '新建任务',
-                ),
+              p.IconButton(
+                onPressed: widget.store.refreshing
+                    ? null
+                    : () => widget.store.refresh(),
+                icon: widget.store.refreshing
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: p.ActivityIndicator(),
+                      )
+                    : const GlyphIcon(TodoGlyphs.cloud),
+                tooltip: '从服务端刷新',
+              ),
             ],
           ),
           foot: wide
@@ -131,22 +141,43 @@ class _HomeShellState extends State<HomeShell> {
       2 => _quadrants(context),
       _ => _more(context),
     };
-    return ListView(
-      key: PageStorageKey('page-$_selected'),
-      padding: EdgeInsets.fromLTRB(
-        20,
-        MediaQuery.paddingOf(context).top + 10,
-        20,
-        (wide
-                ? MediaQuery.paddingOf(context).bottom
-                : p.NavigationDock.insetOf(context)) +
-            28,
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification.metrics.axis != Axis.vertical) return false;
+        if (notification is ScrollStartNotification) _pullReady = false;
+        if (notification is ScrollUpdateNotification &&
+            notification.metrics.pixels < -72) {
+          _pullReady = true;
+        }
+        if (notification is ScrollEndNotification && _pullReady) {
+          _pullReady = false;
+          widget.store.refresh();
+        }
+        return false;
+      },
+      child: ListView(
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
+        key: PageStorageKey('page-$_selected'),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          MediaQuery.paddingOf(context).top + 10,
+          20,
+          (wide
+                  ? MediaQuery.paddingOf(context).bottom
+                  : p.NavigationDock.insetOf(context)) +
+              28,
+        ),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ReadStatus(store: widget.store),
+          ),
+          const SizedBox(height: 18),
+          ...children,
+        ],
       ),
-      children: [
-        const Align(alignment: Alignment.centerLeft, child: DemoBadge()),
-        const SizedBox(height: 18),
-        ...children,
-      ],
     );
   }
 
@@ -453,20 +484,23 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   List<Widget> _more(BuildContext context) {
+    final store = widget.store;
     final colors = p.Theme.of(context).colorScheme;
+    final sync = store.campus;
     return [
       p.Card(
+        inert: true,
         padding: const EdgeInsets.all(22),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '留一点空白给自己',
+              '你的待办，随处可见',
               style: p.AppTextStyle.title2.of(context, emphasized: true),
             ),
             const SizedBox(height: 10),
             Text(
-              '这是 Todo 的界面与交互演示。任务修改仅保存在本次会话，尚未连接云端。',
+              '当前阶段可读取真实任务。新建、编辑和完成操作将在 A3 接入。',
               style: p.AppTextStyle.callout
                   .of(context)
                   .copyWith(color: colors.onSurfaceVariant),
@@ -476,6 +510,7 @@ class _HomeShellState extends State<HomeShell> {
       ),
       const SectionHeading('外观'),
       p.Card(
+        inert: true,
         padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -504,7 +539,7 @@ class _HomeShellState extends State<HomeShell> {
         child: const p.ListRow(
           leading: GlyphIcon(TodoGlyphs.calendar),
           title: Text('日期安排'),
-          subtitle: Text('演示任务的时间清单'),
+          subtitle: Text('查看任务的截止时间'),
           trailing: GlyphIcon(Glyphs.chevronForward, size: 16),
         ),
       ),
@@ -519,23 +554,73 @@ class _HomeShellState extends State<HomeShell> {
           trailing: GlyphIcon(Glyphs.chevronForward, size: 16),
         ),
       ),
-      const SectionHeading('云端'),
-      const p.Card(
-        padding: EdgeInsets.zero,
-        child: p.ListRow(
-          leading: GlyphIcon(TodoGlyphs.cloud),
-          title: Text('云端连接'),
-          subtitle: Text('尚未连接 · 当前使用演示数据'),
-          trailing: StatusPill(label: '演示'),
+      const SectionHeading('服务与同步'),
+      p.Card(
+        inert: true,
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('服务地址', style: p.AppTextStyle.headline.of(context)),
+            const SizedBox(height: 8),
+            Text(store.origin),
+            const SizedBox(height: 20),
+            Text('App 最近读取', style: p.AppTextStyle.headline.of(context)),
+            const SizedBox(height: 8),
+            Text(readTimeLabel(store.readAt)),
+            const SizedBox(height: 20),
+            Text('校园上游同步', style: p.AppTextStyle.headline.of(context)),
+            const SizedBox(height: 8),
+            Text(sync == null ? '服务端尚未记录同步结果' : businessDateString(sync.at)!),
+            if (sync != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  sync.error == null
+                      ? '最近结果：新增 ${sync.added} · 更新 ${sync.updated} · 完成 ${sync.completed}'
+                      : '上次同步失败：${sync.error!}',
+                  style: TextStyle(
+                    color: sync.error == null
+                        ? colors.onSurfaceVariant
+                        : colors.error,
+                  ),
+                ),
+              ),
+            if (store.campusReadError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '状态读取失败：${store.campusReadError!}',
+                  style: TextStyle(color: colors.error),
+                ),
+              ),
+            const SizedBox(height: 16),
+            Text(
+              '刷新只读取 Todo 服务，不触发校园上游同步。',
+              style: p.AppTextStyle.caption1
+                  .of(context)
+                  .copyWith(color: colors.onSurfaceVariant),
+            ),
+          ],
         ),
+      ),
+      const SizedBox(height: 16),
+      p.FilledButton(
+        onPressed: store.refreshing ? null : () => store.refresh(),
+        child: Text(store.refreshing ? '正在读取' : '从服务端刷新'),
+      ),
+      const SizedBox(height: 12),
+      p.TextButton(
+        onPressed: () => store.logout(),
+        child: const Text('退出登录 / 切换服务地址'),
       ),
     ];
   }
 
-  Widget _tile(DemoTask task) => TaskTile(
+  Widget _tile(TodoTask task) => TaskTile(
     key: ValueKey(task.id),
     task: task,
-    onToggle: () => widget.store.toggle(task.id),
+    onToggle: null,
     onOpen: () => Navigator.of(context).push(
       todoPageRoute<void>(
         context,
@@ -544,7 +629,7 @@ class _HomeShellState extends State<HomeShell> {
     ),
   );
 
-  void _openGroup(String title, bool Function(DemoTask) predicate) {
+  void _openGroup(String title, bool Function(TodoTask) predicate) {
     Navigator.of(context).push(
       todoPageRoute<void>(
         context,
@@ -561,9 +646,9 @@ class _HomeShellState extends State<HomeShell> {
                   32,
                 ),
                 children: [
-                  const Align(
+                  Align(
                     alignment: Alignment.centerLeft,
-                    child: DemoBadge(),
+                    child: ReadStatus(store: widget.store),
                   ),
                   const SizedBox(height: 20),
                   if (!widget.store.tasks.any(predicate))
@@ -580,11 +665,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _openProjects() {
-    final projects = widget.store.tasks
-        .map((t) => t.project)
-        .where((p) => p.isNotEmpty)
-        .toSet()
-        .toList();
+    final projects = widget.store.projects;
     showTodoFormSheet<void>(
       context: context,
       builder: (context) => p.PrismScaffold(

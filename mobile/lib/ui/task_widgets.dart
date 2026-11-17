@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart' as p;
 import 'package:prism_ui/icons/icons.dart';
 
-import '../data/demo_tasks.dart';
+import '../data/task.dart';
 
 class DemoBadge extends StatelessWidget {
   const DemoBadge({super.key});
@@ -70,9 +70,9 @@ class TaskTile extends StatelessWidget {
     required this.onOpen,
     required this.onToggle,
   });
-  final DemoTask task;
+  final TodoTask task;
   final VoidCallback onOpen;
-  final VoidCallback onToggle;
+  final VoidCallback? onToggle;
   @override
   Widget build(BuildContext context) {
     final colors = p.Theme.of(context).colorScheme;
@@ -89,11 +89,15 @@ class TaskTile extends StatelessWidget {
           child: Row(
             children: [
               Semantics(
-                label: task.done ? '标为未完成' : '完成任务',
+                label: onToggle == null
+                    ? (task.done ? '已完成' : '未完成')
+                    : task.done
+                    ? '标为未完成'
+                    : '完成任务',
                 child: p.Checkbox(
                   value: task.done,
                   isCircle: true,
-                  onChanged: (_) => onToggle(),
+                  onChanged: onToggle == null ? null : (_) => onToggle!(),
                 ),
               ),
               Expanded(

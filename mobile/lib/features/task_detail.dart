@@ -3,6 +3,9 @@ import 'package:prism_ui/prism_ui.dart' as p;
 import 'package:prism_ui/icons/icons.dart';
 
 import '../data/demo_tasks.dart';
+import '../data/task.dart';
+import '../data/remote_tasks.dart';
+import '../ui/read_status.dart';
 import '../ui/task_widgets.dart';
 import '../ui/todo_motion.dart';
 import '../ui/todo_glyphs.dart';
@@ -10,7 +13,7 @@ import '../ui/todo_glyphs.dart';
 Future<void> openTaskEditor(
   BuildContext context,
   DemoTaskStore store, {
-  DemoTask? task,
+  TodoTask? task,
 }) => showTodoFormSheet<void>(
   context: context,
   props: const p.SheetProps(detents: [0.7, 0.94]),
@@ -19,185 +22,111 @@ Future<void> openTaskEditor(
 
 class TaskDetail extends StatelessWidget {
   const TaskDetail({super.key, required this.store, required this.id});
-  final DemoTaskStore store;
+  final RemoteTaskStore store;
   final int id;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
     builder: (context, _) {
       final task = store.task(id);
-      if (task == null) {
-        return p.PrismScaffold(
-          bar: todoBar(context, '任务', back: true),
-          body: const Center(child: Text('演示任务已移除')),
-        );
-      }
       return p.PrismScaffold(
-        bar: todoBar(
-          context,
-          '任务详情',
-          back: true,
-          actions: [
-            p.IconButton(
-              onPressed: () => openTaskEditor(context, store, task: task),
-              icon: const GlyphIcon(TodoGlyphs.edit),
-              tooltip: '编辑任务',
-            ),
-          ],
-        ),
+        bar: todoBar(context, '任务详情', back: true),
         body: Builder(
           builder: (context) => ListView(
             padding: EdgeInsets.fromLTRB(
               20,
-              MediaQuery.paddingOf(context).top + 12,
+              context.appBarInset + 12,
               20,
               32 + MediaQuery.paddingOf(context).bottom,
             ),
             children: [
-              const Align(alignment: Alignment.centerLeft, child: DemoBadge()),
+              ReadStatus(store: store),
               const SizedBox(height: 20),
-              p.Card(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      task.title,
-                      style: p.AppTextStyle.title2.of(
-                        context,
-                        emphasized: true,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        p.Checkbox(
-                          value: task.done,
-                          isCircle: true,
-                          onChanged: (_) => store.toggle(id),
+              if (task == null)
+                const EmptyTasks(message: '任务已从最新快照中移除。')
+              else ...[
+                p.Card(
+                  inert: true,
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        style: p.AppTextStyle.title2.of(
+                          context,
+                          emphasized: true,
                         ),
-                        Text(
-                          task.done ? '已完成' : '待处理',
-                          style: p.AppTextStyle.body.of(context),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SectionHeading('任务信息'),
-              p.Card(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    p.ListRow(
-                      leading: const GlyphIcon(TodoGlyphs.calendar),
-                      title: const Text('截止时间'),
-                      trailing: Text(dueLabel(task.dueAt)),
-                    ),
-                    p.ListRow(
-                      leading: const GlyphIcon(TodoGlyphs.tasks),
-                      title: const Text('项目'),
-                      trailing: Text(
-                        task.project.isEmpty ? '未分组' : task.project,
                       ),
-                    ),
-                    p.ListRow(
-                      leading: const GlyphIcon(Glyphs.pin),
-                      title: const Text('置顶'),
-                      trailing: p.Switch(
-                        value: task.pinned,
-                        onChanged: (value) =>
-                            store.save(task.copyWith(pinned: value)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SectionHeading('备注'),
-              p.Card(
-                padding: const EdgeInsets.all(20),
-                child: Text(
-                  task.note.isEmpty ? '给这件事补充一点想法。' : task.note,
-                  style: p.AppTextStyle.body.of(context),
-                ),
-              ),
-              const SizedBox(height: 24),
-              p.TextButton.icon(
-                onPressed: () => _delete(context, task),
-                icon: GlyphIcon(
-                  TodoGlyphs.trash,
-                  color: p.Theme.of(context).colorScheme.error,
-                ),
-                label: Text(
-                  '删除演示任务',
-                  style: TextStyle(
-                    color: p.Theme.of(context).colorScheme.error,
+                      const SizedBox(height: 18),
+                      StatusPill(label: task.done ? '已完成' : '待处理'),
+                    ],
                   ),
                 ),
-              ),
+                const SectionHeading('任务信息'),
+                p.Card(
+                  inert: true,
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      p.ListRow(
+                        leading: const GlyphIcon(TodoGlyphs.calendar),
+                        title: const Text('截止时间'),
+                        subtitle: Text(dueLabel(task.dueAt)),
+                      ),
+                      if (task.startAt != null)
+                        p.ListRow(
+                          title: const Text('开始时间'),
+                          subtitle: Text(dueLabel(task.startAt)),
+                        ),
+                      p.ListRow(
+                        leading: const GlyphIcon(TodoGlyphs.tasks),
+                        title: const Text('项目'),
+                        subtitle: Text(
+                          task.project.isEmpty ? '未分组' : task.project,
+                        ),
+                      ),
+                      p.ListRow(
+                        leading: const GlyphIcon(Glyphs.pin),
+                        title: const Text('置顶'),
+                        trailing: Text(task.pinned ? '是' : '否'),
+                      ),
+                      p.ListRow(
+                        title: const Text('来源'),
+                        trailing: Text(
+                          task.externalId == null ? '个人任务' : '校园同步',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SectionHeading('备注'),
+                p.Card(
+                  inert: true,
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    task.note.isEmpty ? '暂无备注' : task.note,
+                    style: p.AppTextStyle.body.of(context),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'A2 为只读预览，修改操作将在 A3 接入。',
+                  style: p.AppTextStyle.footnote.of(context),
+                ),
+              ],
             ],
           ),
         ),
       );
     },
   );
-
-  Future<void> _delete(BuildContext context, DemoTask task) async {
-    final confirmed = await showTodoFormSheet<bool>(
-      context: context,
-      builder: (sheetContext) => p.PrismScaffold(
-        bar: todoBar(
-          sheetContext,
-          '删除任务',
-          actions: [
-            p.TextButton(
-              onPressed: () => Navigator.of(sheetContext).pop(false),
-              child: const Text('取消'),
-            ),
-          ],
-        ),
-        body: Builder(
-          builder: (context) => Padding(
-            padding: EdgeInsets.fromLTRB(24, context.appBarInset + 24, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '从本次演示中移除这条任务？',
-                  style: p.AppTextStyle.title3.of(
-                    sheetContext,
-                    emphasized: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(task.title),
-                const SizedBox(height: 24),
-                p.FilledButton(
-                  onPressed: () => Navigator.of(sheetContext).pop(true),
-                  style: p.ButtonStyle.from(
-                    backgroundColor: p.Theme.of(sheetContext).colorScheme.error,
-                  ),
-                  child: const Text('确认删除'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (confirmed == true && context.mounted) {
-      Navigator.of(context).pop();
-      store.remove(id);
-    }
-  }
 }
 
 class TaskEditor extends StatefulWidget {
   const TaskEditor({super.key, required this.store, this.task});
   final DemoTaskStore store;
-  final DemoTask? task;
+  final TodoTask? task;
   @override
   State<TaskEditor> createState() => _TaskEditorState();
 }

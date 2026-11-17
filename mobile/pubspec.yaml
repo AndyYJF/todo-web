@@ -1,7 +1,7 @@
 name: todo
 description: Personal Todo client with FlClash-style Prism UI.
 publish_to: none
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.13.5
@@ -12,6 +12,8 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  dio: 5.11.1
+  path_provider: 2.1.6
   prism_ui:
     git:
       url: https://github.com/chen08209/prism_ui.git
