@@ -103,7 +103,7 @@ class TaskDraft {
   );
 }
 
-enum WriteKind { create, patch, delete }
+enum WriteKind { create, patch, delete, classify, campusSync }
 
 enum WriteState { confirmed, rejected, pending }
 

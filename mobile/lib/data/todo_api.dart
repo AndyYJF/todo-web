@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
@@ -89,6 +90,51 @@ class CampusStatus {
   };
 }
 
+class ClassifyResult {
+  const ClassifyResult({
+    required this.classified,
+    required this.ruleCount,
+    required this.aiUsed,
+    this.error,
+  });
+  final int classified, ruleCount;
+  final bool aiUsed;
+  final String? error;
+  factory ClassifyResult.fromJson(Map data) => ClassifyResult(
+    classified: data['classified'] as int,
+    ruleCount: data['failed'] as int,
+    aiUsed: data['aiUsed'] as bool,
+    error: data['error'] as String?,
+  );
+  String get message => classified == 0
+      ? '没有需要分类的未完成任务'
+      : aiUsed
+      ? '已分类 $classified 条：AI ${classified - ruleCount} 条，规则兜底 $ruleCount 条'
+      : '已通过规则分类 $classified 条（AI 未使用）';
+}
+
+class CampusSyncResult {
+  const CampusSyncResult({
+    required this.added,
+    required this.updated,
+    required this.completed,
+    required this.total,
+    this.error,
+  });
+  final int added, updated, completed, total;
+  final String? error;
+  factory CampusSyncResult.fromJson(Map data) => CampusSyncResult(
+    added: data['added'] as int,
+    updated: data['updated'] as int,
+    completed: data['completed'] as int,
+    total: data['total'] as int,
+    error: data['error'] as String?,
+  );
+  String get message => error == null
+      ? '校园同步完成：新增 $added · 更新 $updated · 完成 $completed'
+      : '校园同步失败：$error';
+}
+
 class TodoApi {
   TodoApi(this.origin)
     : _dio = Dio(
@@ -112,6 +158,9 @@ class TodoApi {
     Map<String, dynamic>? query,
     bool authenticated = true,
     bool mutation = false,
+    bool binary = false,
+    Set<int> acceptedStatuses = const {},
+    Duration? receiveTimeout,
   }) async {
     final headers = <String, dynamic>{'Accept': 'application/json'};
     if (authenticated) {
@@ -126,7 +175,12 @@ class TodoApi {
         origin.resolve(path).toString(),
         data: data,
         queryParameters: query,
-        options: Options(method: method, headers: headers),
+        options: Options(
+          method: method,
+          headers: headers,
+          responseType: binary ? ResponseType.bytes : ResponseType.json,
+          receiveTimeout: receiveTimeout,
+        ),
       );
       final status = response.statusCode!;
       if (status >= 300 && status < 400) {
@@ -139,14 +193,15 @@ class TodoApi {
           statusCode: status,
         );
       }
-      if (status < 200 || status >= 300) {
+      if ((status < 200 || status >= 300) &&
+          !acceptedStatuses.contains(status)) {
         throw ApiFailure(
           '服务请求失败（HTTP $status）',
           statusCode: status,
           uncertain: mutation && (status >= 500 || status == 408),
         );
       }
-      if (response.data is! Map) {
+      if (!binary && response.data is! Map) {
         throw ApiFailure('服务返回的数据格式不正确', uncertain: mutation);
       }
       return response;
@@ -277,6 +332,75 @@ class TodoApi {
     if ((response.data as Map)['ok'] != true) {
       throw const ApiFailure('删除响应异常，请先核对结果', uncertain: true);
     }
+  }
+
+  Future<ClassifyResult> classifyTasks({bool force = false}) async {
+    final response = await _request(
+      '/api/classify',
+      method: 'POST',
+      query: force ? {'force': '1'} : null,
+      mutation: true,
+      receiveTimeout: const Duration(minutes: 3),
+    );
+    try {
+      return ClassifyResult.fromJson(response.data as Map);
+    } catch (_) {
+      throw const ApiFailure('分类响应无法解析，请先刷新四象限核对', uncertain: true);
+    }
+  }
+
+  Future<CampusSyncResult> syncCampus() async {
+    final response = await _request(
+      '/api/sync',
+      method: 'POST',
+      mutation: true,
+      acceptedStatuses: const {502},
+      receiveTimeout: const Duration(seconds: 90),
+    );
+    try {
+      return CampusSyncResult.fromJson(response.data as Map);
+    } catch (_) {
+      throw const ApiFailure('校园同步响应无法解析，请先核对任务与上游状态', uncertain: true);
+    }
+  }
+
+  Uri imageUri(String source) {
+    final input = Uri.tryParse(source.trim());
+    if (input == null ||
+        input.userInfo.isNotEmpty ||
+        (input.hasScheme &&
+            (!['http', 'https'].contains(input.scheme) ||
+                input.host.isEmpty))) {
+      throw const ApiFailure('不支持的图片地址');
+    }
+    if ((!input.hasScheme && !input.hasAuthority && input.path == '/api/img') ||
+        (input.hasScheme &&
+            input.origin == origin.origin &&
+            input.path == '/api/img')) {
+      return origin.resolveUri(input);
+    }
+    if (!['http', 'https'].contains(input.scheme) || input.host.isEmpty) {
+      throw const ApiFailure('不支持的图片地址');
+    }
+    return origin
+        .resolve('/api/img')
+        .replace(queryParameters: {'u': input.toString()});
+  }
+
+  Future<Uint8List> image(String source) async {
+    final uri = imageUri(source);
+    final response = await _request(
+      uri.path,
+      binary: true,
+      query: uri.queryParameters,
+      receiveTimeout: const Duration(seconds: 50),
+    );
+    final contentType =
+        response.headers.value(HttpHeaders.contentTypeHeader) ?? '';
+    if (!contentType.toLowerCase().startsWith('image/')) {
+      throw const ApiFailure('服务返回的内容不是图片');
+    }
+    return Uint8List.fromList((response.data as List).cast<int>());
   }
 
   Future<void> logout() async {

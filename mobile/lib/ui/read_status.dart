@@ -49,6 +49,14 @@ class ReadStatus extends StatelessWidget {
                   .copyWith(color: colors.error),
             ),
           ),
+        if (store.serviceMessage != null && store.writeError == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              store.serviceMessage!,
+              style: p.AppTextStyle.footnote.of(context),
+            ),
+          ),
         WriteNotice(store: store),
       ],
     );

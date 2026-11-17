@@ -9,6 +9,9 @@ import '../ui/task_widgets.dart';
 import '../ui/todo_motion.dart';
 import '../ui/todo_glyphs.dart';
 import 'task_detail.dart';
+import 'task_views_page.dart';
+import 'settings_page.dart';
+import '../ui/service_actions.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({
@@ -418,6 +421,21 @@ class _HomeShellState extends State<HomeShell> {
     ];
     final pending = widget.store.tasks.where((t) => !t.done).toList();
     return [
+      p.FilledButton(
+        onPressed:
+            widget.store.canWrite &&
+                pending.any((t) => t.urgent == null || t.important == null)
+            ? () => classifyTasks(context, widget.store)
+            : null,
+        child: const Text('AI 分类未分类任务'),
+      ),
+      p.TextButton(
+        onPressed: widget.store.canWrite && pending.isNotEmpty
+            ? () => classifyTasks(context, widget.store, force: true)
+            : null,
+        child: const Text('重新分类全部未完成任务'),
+      ),
+      const SizedBox(height: 12),
       Padding(
         padding: const EdgeInsets.fromLTRB(4, 0, 4, 18),
         child: Text(
@@ -530,139 +548,69 @@ class _HomeShellState extends State<HomeShell> {
     ];
   }
 
-  List<Widget> _more(BuildContext context) {
-    final store = widget.store;
-    final colors = p.Theme.of(context).colorScheme;
-    final sync = store.campus;
-    return [
-      p.Card(
-        inert: true,
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '你的待办，随处可见',
-              style: p.AppTextStyle.title2.of(context, emphasized: true),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '任务与网页共用服务端数据。前台每30秒刷新，后台不轮询。',
-              style: p.AppTextStyle.callout
-                  .of(context)
-                  .copyWith(color: colors.onSurfaceVariant),
-            ),
-          ],
+  List<Widget> _more(BuildContext context) => [
+    p.Card(
+      inert: true,
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '你的待办，随处可见',
+            style: p.AppTextStyle.title2.of(context, emphasized: true),
+          ),
+          const SizedBox(height: 10),
+          const Text('任务与网页共用服务端数据，按自己的节奏安排生活。'),
+        ],
+      ),
+    ),
+    const SectionHeading('浏览'),
+    p.Card(
+      padding: EdgeInsets.zero,
+      onPressed: () => Navigator.of(context).push(
+        todoPageRoute<void>(context, (_) => CalendarPage(store: widget.store)),
+      ),
+      child: const p.ListRow(
+        leading: GlyphIcon(TodoGlyphs.calendar),
+        title: Text('日历'),
+        subtitle: Text('按日期查看任务与时间范围'),
+        trailing: GlyphIcon(Glyphs.chevronForward),
+      ),
+    ),
+    const SizedBox(height: 8),
+    p.Card(
+      padding: EdgeInsets.zero,
+      onPressed: () => Navigator.of(context).push(
+        todoPageRoute<void>(context, (_) => ProjectsPage(store: widget.store)),
+      ),
+      child: const p.ListRow(
+        leading: GlyphIcon(TodoGlyphs.tasks),
+        title: Text('项目'),
+        subtitle: Text('分组、搜索与状态筛选'),
+        trailing: GlyphIcon(Glyphs.chevronForward),
+      ),
+    ),
+    const SectionHeading('偏好与服务'),
+    p.Card(
+      padding: EdgeInsets.zero,
+      onPressed: () => Navigator.of(context).push(
+        todoPageRoute<void>(
+          context,
+          (_) => SettingsPage(
+            store: widget.store,
+            themeMode: widget.themeMode,
+            onThemeChanged: widget.onThemeChanged,
+          ),
         ),
       ),
-      const SectionHeading('外观'),
-      p.Card(
-        inert: true,
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('主题', style: p.AppTextStyle.headline.of(context)),
-            const SizedBox(height: 14),
-            p.SegmentedControl<p.ThemeMode>(
-              key: MediaQuery.disableAnimationsOf(context)
-                  ? ValueKey(widget.themeMode)
-                  : null,
-              segments: const [
-                (p.ThemeMode.system, '跟随系统'),
-                (p.ThemeMode.light, '浅色'),
-                (p.ThemeMode.dark, '深色'),
-              ],
-              value: widget.themeMode,
-              onChanged: widget.onThemeChanged,
-            ),
-          ],
-        ),
+      child: const p.ListRow(
+        leading: GlyphIcon(TodoGlyphs.more),
+        title: Text('设置'),
+        subtitle: Text('主题、会话与校园同步'),
+        trailing: GlyphIcon(Glyphs.chevronForward),
       ),
-      const SectionHeading('浏览'),
-      p.Card(
-        padding: EdgeInsets.zero,
-        onPressed: () => _openGroup('有日期的任务', (t) => t.dueAt != null),
-        child: const p.ListRow(
-          leading: GlyphIcon(TodoGlyphs.calendar),
-          title: Text('日期安排'),
-          subtitle: Text('查看任务的截止时间'),
-          trailing: GlyphIcon(Glyphs.chevronForward, size: 16),
-        ),
-      ),
-      const SizedBox(height: 8),
-      p.Card(
-        padding: EdgeInsets.zero,
-        onPressed: _openProjects,
-        child: const p.ListRow(
-          leading: GlyphIcon(TodoGlyphs.tasks),
-          title: Text('项目分组'),
-          subtitle: Text('从不同生活侧面查看任务'),
-          trailing: GlyphIcon(Glyphs.chevronForward, size: 16),
-        ),
-      ),
-      const SectionHeading('服务与同步'),
-      p.Card(
-        inert: true,
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('服务地址', style: p.AppTextStyle.headline.of(context)),
-            const SizedBox(height: 8),
-            Text(store.origin),
-            const SizedBox(height: 20),
-            Text('App 最近读取', style: p.AppTextStyle.headline.of(context)),
-            const SizedBox(height: 8),
-            Text(readTimeLabel(store.readAt)),
-            const SizedBox(height: 20),
-            Text('校园上游同步', style: p.AppTextStyle.headline.of(context)),
-            const SizedBox(height: 8),
-            Text(sync == null ? '服务端尚未记录同步结果' : businessDateString(sync.at)!),
-            if (sync != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  sync.error == null
-                      ? '最近结果：新增 ${sync.added} · 更新 ${sync.updated} · 完成 ${sync.completed}'
-                      : '上次同步失败：${sync.error!}',
-                  style: TextStyle(
-                    color: sync.error == null
-                        ? colors.onSurfaceVariant
-                        : colors.error,
-                  ),
-                ),
-              ),
-            if (store.campusReadError != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '状态读取失败：${store.campusReadError!}',
-                  style: TextStyle(color: colors.error),
-                ),
-              ),
-            const SizedBox(height: 16),
-            Text(
-              '刷新只读取 Todo 服务，不触发校园上游同步。',
-              style: p.AppTextStyle.caption1
-                  .of(context)
-                  .copyWith(color: colors.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 16),
-      p.FilledButton(
-        onPressed: store.refreshing ? null : () => store.refresh(),
-        child: Text(store.refreshing ? '正在读取' : '从服务端刷新'),
-      ),
-      const SizedBox(height: 12),
-      p.TextButton(
-        onPressed: () => store.logout(),
-        child: const Text('退出登录 / 切换服务地址'),
-      ),
-    ];
-  }
+    ),
+  ];
 
   Widget _tile(TodoTask task) => TaskTile(
     key: ValueKey(task.id),
@@ -707,51 +655,6 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               ),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openProjects() {
-    final projects = widget.store.projects;
-    showTodoFormSheet<void>(
-      context: context,
-      builder: (context) => p.PrismScaffold(
-        bar: todoBar(
-          context,
-          '项目分组',
-          actions: [
-            p.IconButton(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const GlyphIcon(Glyphs.close),
-              tooltip: '关闭',
-            ),
-          ],
-        ),
-        body: Builder(
-          builder: (context) => ListView(
-            shrinkWrap: true,
-            padding: EdgeInsets.fromLTRB(20, context.appBarInset + 20, 20, 20),
-            children: [
-              for (final project in projects)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: p.Card(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      _openGroup(project, (t) => t.project == project);
-                    },
-                    child: p.ListRow(
-                      title: Text(project),
-                      trailing: const GlyphIcon(
-                        Glyphs.chevronForward,
-                        size: 16,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
           ),
         ),
       ),

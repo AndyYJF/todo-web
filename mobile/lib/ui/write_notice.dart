@@ -43,7 +43,13 @@ class WriteNotice extends StatelessWidget {
               store.writing
                   ? '收到服务端结果后会更新任务。'
                   : sameOrigin
-                  ? '先重新读取并核对结果。新建任务不会自动重发。'
+                  ? switch (operation.kind) {
+                      WriteKind.classify =>
+                        '分类结果尚未确认，请刷新四象限核对。原请求可能仍在处理，不会自动重新分类。',
+                      WriteKind.campusSync =>
+                        '校园同步结果尚未确认，请刷新任务和校园状态核对。原请求可能仍在处理，不会自动重发同步。',
+                      _ => '先重新读取并核对结果。新建任务不会自动重发。',
+                    }
                   : '请登录原站点核对：${operation.origin}',
               style: p.AppTextStyle.footnote.of(context),
             ),

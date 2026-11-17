@@ -28,7 +28,9 @@ class RemoteTaskStore extends ChangeNotifier {
   Timer? _poll;
   TaskDraft? draft;
   PendingWrite? pending;
-  String? writeError, lastCompletedDraftKey;
+  String? writeError, lastCompletedDraftKey, serviceMessage;
+  ClassifyResult? lastClassification;
+  DateTime? get sessionExpiresAt => _api.session?.expiresAt;
   TaskDraft? get activeDraft => draft?.origin == origin ? draft : null;
   bool get canWrite =>
       authenticated &&
@@ -169,6 +171,8 @@ class RemoteTaskStore extends ChangeNotifier {
     campus = null;
     cached = false;
     campusReadError = null;
+    serviceMessage = null;
+    lastClassification = null;
   }
 
   Future<bool> _persist() async {
@@ -388,6 +392,24 @@ class RemoteTaskStore extends ChangeNotifier {
     await _persist();
   }
 
+  Future<WriteOutcome> classifyTasks({bool force = false}) =>
+      _mutate(WriteKind.classify, null, {'force': force});
+  Future<WriteOutcome> syncCampus() =>
+      _mutate(WriteKind.campusSync, null, const {});
+  Future<Uint8List> image(String source) async {
+    final generation = _generation;
+    try {
+      final bytes = await _api.image(source);
+      if (generation != _generation || _disposed) {
+        throw const ApiFailure('会话已变化，请重新打开图片');
+      }
+      return bytes;
+    } on ApiFailure catch (e) {
+      if (generation == _generation && e.unauthorized) await _expire();
+      rethrow;
+    }
+  }
+
   Future<WriteOutcome> createTask(
     Map<String, dynamic> input, {
     String? draftKey,
@@ -422,6 +444,7 @@ class RemoteTaskStore extends ChangeNotifier {
     final auth = _generation, api = _api;
     writing = true;
     writeError = null;
+    serviceMessage = null;
     ++_writeGeneration;
     ++_readRequest;
     _inFlight = null;
@@ -453,6 +476,8 @@ class RemoteTaskStore extends ChangeNotifier {
     WriteOutcome outcome;
     try {
       TodoTask? saved;
+      ClassifyResult? classification;
+      CampusSyncResult? campusResult;
       switch (kind) {
         case WriteKind.create:
           saved = await api.createTask(fields);
@@ -460,6 +485,12 @@ class RemoteTaskStore extends ChangeNotifier {
           saved = fields.isEmpty ? task(id!) : await api.patchTask(id!, fields);
         case WriteKind.delete:
           await api.deleteTask(id!);
+        case WriteKind.classify:
+          classification = await api.classifyTasks(
+            force: fields['force'] == true,
+          );
+        case WriteKind.campusSync:
+          campusResult = await api.syncCampus();
       }
       if (auth != _generation || _disposed) {
         return const WriteOutcome(WriteState.pending, '会话已变化，请重新登录后核对提交结果');
@@ -470,9 +501,19 @@ class RemoteTaskStore extends ChangeNotifier {
         _tasks = [saved, ..._tasks.where((t) => t.id != saved!.id)];
       }
       _completePending(operation);
+      if (classification != null) {
+        lastClassification = classification;
+        serviceMessage = classification.message;
+      }
+      if (campusResult != null) {
+        serviceMessage = campusResult.message;
+        if (campusResult.error != null) writeError = serviceMessage;
+      }
       outcome = WriteOutcome(
-        WriteState.confirmed,
-        kind == WriteKind.delete ? '已删除' : '已保存',
+        campusResult?.error != null
+            ? WriteState.rejected
+            : WriteState.confirmed,
+        serviceMessage ?? (kind == WriteKind.delete ? '已删除' : '已保存'),
         task: saved,
       );
     } on ApiFailure catch (e) {

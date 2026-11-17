@@ -13,6 +13,10 @@ import '../ui/write_notice.dart';
 import '../ui/task_widgets.dart';
 import '../ui/todo_motion.dart';
 import '../ui/todo_glyphs.dart';
+import '../ui/service_actions.dart';
+import '../ui/rich_note.dart';
+import '../ui/task_date_picker.dart';
+import '../data/task_views.dart';
 
 Future<void> openTaskEditor(
   BuildContext context,
@@ -184,6 +188,20 @@ class TaskDetail extends StatelessWidget {
                         ),
                       ),
                       p.ListRow(
+                        leading: const GlyphIcon(TodoGlyphs.quadrant),
+                        title: const Text('象限'),
+                        subtitle: Text(
+                          quadrantLabel(task.urgent, task.important),
+                        ),
+                        trailing: p.IconButton(
+                          icon: const GlyphIcon(Glyphs.chevronForward),
+                          tooltip: '选择象限',
+                          onPressed: store.canWrite
+                              ? () => chooseQuadrant(context, store, id)
+                              : null,
+                        ),
+                      ),
+                      p.ListRow(
                         title: const Text('来源'),
                         trailing: Text(
                           task.externalId == null ? '个人任务' : '校园同步',
@@ -196,10 +214,7 @@ class TaskDetail extends StatelessWidget {
                 p.Card(
                   inert: true,
                   padding: const EdgeInsets.all(20),
-                  child: Text(
-                    task.note.isEmpty ? '暂无备注' : task.note,
-                    style: p.AppTextStyle.body.of(context),
-                  ),
+                  child: RichNote(store: store, text: task.note),
                 ),
                 const SizedBox(height: 24),
                 p.TextButton.icon(
@@ -519,27 +534,37 @@ class _TaskEditorState extends State<TaskEditor> {
                 decoration: const p.InputDecoration(hintText: '备注、步骤，或一个想法'),
               ),
               const SectionHeading('安排'),
-              const Text('时间按 UTC+8 填写，格式为 年-月-日 时:分；留空表示不设置。'),
-              const SizedBox(height: 12),
-              p.TextField(
-                controller: _start,
-                enabled: !_locked && !_loading,
-                decoration: const p.InputDecoration(
-                  hintText: '开始时间，例如 2026-11-18 09:00',
+              p.Card(
+                inert: true,
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    p.ListRow(
+                      title: const Text('开始时间'),
+                      subtitle: Text(_start.text.isEmpty ? '未设置' : _start.text),
+                      trailing: p.IconButton(
+                        icon: const GlyphIcon(TodoGlyphs.calendar),
+                        tooltip: '选择开始时间',
+                        onPressed: _locked || _loading
+                            ? null
+                            : () => _pickDate(_start, '选择开始时间'),
+                      ),
+                    ),
+                    p.ListRow(
+                      title: const Text('截止时间'),
+                      subtitle: Text(_due.text.isEmpty ? '未设置' : _due.text),
+                      trailing: p.IconButton(
+                        icon: const GlyphIcon(TodoGlyphs.calendar),
+                        tooltip: '选择截止时间',
+                        onPressed: _locked || _loading
+                            ? null
+                            : () => _pickDate(_due, '选择截止时间'),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              p.TextField(
-                controller: _due,
-                enabled: !_locked && !_loading,
-                decoration: const p.InputDecoration(
-                  hintText: '截止时间，例如 2026-11-18 18:00',
-                ),
-              ),
-              p.TextButton(
-                onPressed: _locked || _loading ? null : _pickDate,
-                child: const Text('快捷安排截止时间'),
-              ),
+              const SizedBox(height: 16),
               p.TextField(
                 controller: _project,
                 enabled: !_locked && !_loading,
@@ -608,65 +633,12 @@ class _TaskEditorState extends State<TaskEditor> {
       ),
     ),
   );
-  Future<void> _pickDate() async {
-    final now = businessNow(),
-        day = DateTime.utc(
-          businessNow().year,
-          businessNow().month,
-          businessNow().day,
-        );
-    final options = <(String, DateTime?)>[
-      ('不设日期', null),
-      ('今天 23:59', DateTime.utc(now.year, now.month, now.day, 23, 59)),
-      ('明天 18:00', day.add(const Duration(days: 1, hours: 18))),
-      ('一周后 18:00', day.add(const Duration(days: 7, hours: 18))),
-    ];
-    final picked = await showTodoFormSheet<_DueChoice>(
-      context: context,
-      builder: (context) => p.PrismScaffold(
-        bar: todoBar(
-          context,
-          '安排时间',
-          actions: [
-            p.IconButton(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const GlyphIcon(Glyphs.close),
-              tooltip: '关闭',
-            ),
-          ],
-        ),
-        body: Builder(
-          builder: (context) => ListView(
-            shrinkWrap: true,
-            padding: EdgeInsets.fromLTRB(20, context.appBarInset + 20, 20, 20),
-            children: [
-              for (final option in options)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: p.Card(
-                    onPressed: () =>
-                        Navigator.of(context).pop(_DueChoice(option.$2)),
-                    child: p.ListRow(
-                      title: Text(option.$1),
-                      trailing: const GlyphIcon(
-                        Glyphs.chevronForward,
-                        size: 16,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+  Future<void> _pickDate(TextEditingController controller, String title) async {
+    final picked = await pickTaskDate(
+      context,
+      title: title,
+      value: controller.text.isEmpty ? null : controller.text,
     );
-    if (picked != null && mounted) {
-      _due.text = businessDateString(picked.value) ?? '';
-    }
+    if (picked != null && mounted) controller.text = picked.value ?? '';
   }
-}
-
-class _DueChoice {
-  const _DueChoice(this.value);
-  final DateTime? value;
 }
