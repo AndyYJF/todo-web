@@ -7,6 +7,7 @@ import {
   IconGantt,
   IconList,
   IconPin,
+  IconQuadrant,
   IconSettings,
   IconSun,
 } from "./icons";
@@ -16,6 +17,7 @@ export type ViewKey =
   | "all"
   | "calendar"
   | "gantt"
+  | "quadrant"
   | "projects"
   | "pinned"
   | "settings";
@@ -25,6 +27,7 @@ const ITEMS: { key: ViewKey; label: string; Icon: typeof IconSun }[] = [
   { key: "all", label: "全部任务", Icon: IconList },
   { key: "calendar", label: "日历", Icon: IconCalendar },
   { key: "gantt", label: "甘特图", Icon: IconGantt },
+  { key: "quadrant", label: "四象限", Icon: IconQuadrant },
   { key: "projects", label: "项目跟踪", Icon: IconFolder },
   { key: "pinned", label: "置顶磁贴", Icon: IconPin },
   { key: "settings", label: "设置", Icon: IconSettings },

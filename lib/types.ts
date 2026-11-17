@@ -19,6 +19,10 @@ export interface Task {
   externalId: string | null;
   /** 上游 revision，回写状态时的版本校验 */
   externalRev: number | null;
+  /** 四象限：紧急性，null = 未分类 */
+  urgent: 0 | 1 | null;
+  /** 四象限：重要性，null = 未分类 */
+  important: 0 | 1 | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,4 +41,6 @@ export interface TaskInput {
 export type TaskPatch = Partial<Omit<TaskInput, "title">> & {
   title?: string;
   done?: boolean;
+  urgent?: boolean | null;
+  important?: boolean | null;
 };

@@ -15,6 +15,8 @@ interface Row {
   pinned: number;
   external_id: string | null;
   external_rev: number | null;
+  urgent: number | null;
+  important: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -34,6 +36,8 @@ function toTask(r: Row): Task {
     pinned: r.pinned as 0 | 1,
     externalId: r.external_id,
     externalRev: r.external_rev,
+    urgent: r.urgent === null ? null : (r.urgent as 0 | 1),
+    important: r.important === null ? null : (r.important as 0 | 1),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -157,6 +161,12 @@ export function updateTask(id: number, patch: TaskPatch): Task | null {
   if ("done" in patch && patch.done !== undefined) {
     sets.push("done = ?", "done_at = ?");
     args.push(patch.done ? 1 : 0, patch.done ? nowLocal() : null);
+  }
+  for (const axis of ["urgent", "important"] as const) {
+    if (patch[axis] !== undefined) {
+      sets.push(`${axis} = ?`);
+      args.push(patch[axis] === null ? null : patch[axis] ? 1 : 0);
+    }
   }
   if (!sets.length) return getTask(id);
 

@@ -17,6 +17,7 @@ import CalendarView from "@/components/CalendarView";
 import GanttView from "@/components/GanttView";
 import ProjectsView from "@/components/ProjectsView";
 import PinsView from "@/components/PinsView";
+import QuadrantView from "@/components/QuadrantView";
 import SettingsView from "@/components/SettingsView";
 import TaskDetail from "@/components/TaskDetail";
 
@@ -33,6 +34,8 @@ export default function Home() {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileNav, setMobileNav] = useState(false);
+  const [classifying, setClassifying] = useState(false);
+  const [classifyMsg, setClassifyMsg] = useState("");
 
   const reload = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -122,6 +125,32 @@ export default function Home() {
   async function quickCreate(title: string, dueAt: string | null) {
     await createTask({ title, quick: true, dueAt });
     await reload(true);
+  }
+
+  async function moveQuadrant(t: Task, urgent: boolean, important: boolean) {
+    await patchTask(t.id, { urgent, important });
+    await reload(true);
+  }
+
+  async function runClassify() {
+    setClassifying(true);
+    setClassifyMsg("");
+    try {
+      const hasUnclassified = tasks.some((t) => !t.done && (t.urgent === null || t.important === null));
+      const res = await fetch(hasUnclassified ? "/api/classify" : "/api/classify?force=1", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "分类失败");
+      setClassifyMsg(
+        data.aiUsed
+          ? `已分类 ${data.classified} 条`
+          : `AI 不可用，已用规则分类 ${data.classified} 条`
+      );
+    } catch (e) {
+      setClassifyMsg(e instanceof Error ? e.message : "分类失败");
+    } finally {
+      setClassifying(false);
+      await reload(true);
+    }
   }
 
   return (
@@ -218,6 +247,17 @@ export default function Home() {
             )}
             {view === "gantt" && (
               <GanttView tasks={tasks} onOpen={(t) => openTask(t)} />
+            )}
+            {view === "quadrant" && (
+              <QuadrantView
+                tasks={tasks}
+                onOpen={(t) => openTask(t)}
+                onToggle={toggleDone}
+                onMove={moveQuadrant}
+                onClassify={runClassify}
+                classifying={classifying}
+                classifyMsg={classifyMsg}
+              />
             )}
             {view === "projects" && (
               <ProjectsView

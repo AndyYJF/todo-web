@@ -57,6 +57,17 @@ export function getDb(): DatabaseSync {
     } catch {
       // 索引已存在
     }
+    // 四象限分类（AI / 手动拖拽）
+    try {
+      db.exec("ALTER TABLE tasks ADD COLUMN urgent INTEGER");
+    } catch {
+      // 列已存在
+    }
+    try {
+      db.exec("ALTER TABLE tasks ADD COLUMN important INTEGER");
+    } catch {
+      // 列已存在
+    }
     globalForDb.__todoDb = db;
   }
   return globalForDb.__todoDb;

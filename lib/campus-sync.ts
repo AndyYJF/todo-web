@@ -2,6 +2,7 @@
 // - 增量拉取（updated_since）+ status=all 感知完成/取消
 // - 本地勾选完成 → 回写上游（带 revision 版本校验，412 自动重试一次）
 import { getDb, nowLocal } from "./db";
+import { httpGetJson, httpRequest } from "./httpget";
 
 const PROJECT = "校园事务";
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
@@ -23,6 +24,18 @@ interface UpstreamTask {
     text?: string;
     media?: string[];
   }[];
+}
+
+function errMsg(e: unknown): string {
+  if (!(e instanceof Error)) return `非Error异常: ${String(e)}`;
+  const c = e.cause as Record<string, unknown> | undefined;
+  const detail = c
+    ? Object.entries(c)
+        .filter(([, v]) => typeof v === "string" || typeof v === "number")
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ")
+    : "";
+  return `[sync-v4] ${e.name}: ${e.message}${detail ? ` [${detail}]` : ""}`;
 }
 
 /** 从 CAMPUS_API_URL 解析 base 与 token */
@@ -118,12 +131,21 @@ export interface SyncResult {
   error?: string;
 }
 
-let lastResult: (SyncResult & { at: string }) | null = null;
-// 上次全量同步的上游时间戳（增量游标）
-let lastUpstreamAt: string | null = null;
+interface CampusSyncState {
+  lastResult: (SyncResult & { at: string }) | null;
+  lastUpstreamAt: string | null;
+  started: boolean;
+}
+
+const globalForSync = globalThis as unknown as { __campusSyncState?: CampusSyncState };
+const syncState = (globalForSync.__campusSyncState ??= {
+  lastResult: null,
+  lastUpstreamAt: null,
+  started: false,
+});
 
 export function lastSyncResult() {
-  return lastResult;
+  return syncState.lastResult;
 }
 
 export async function syncCampusTasks(): Promise<SyncResult> {
@@ -133,48 +155,41 @@ export async function syncCampusTasks(): Promise<SyncResult> {
     updated: 0,
     completed: 0,
     total: 0,
-    incremental: !!lastUpstreamAt,
+    incremental: !!syncState.lastUpstreamAt,
   };
   if (!c) {
     result.error = "未配置 CAMPUS_API_URL";
-    lastResult = { ...result, at: nowLocal() };
+    syncState.lastResult = { ...result, at: nowLocal() };
     return result;
   }
 
   // 上游网络不稳定：拉取重试最多 3 次
-  let res: Response | null = null;
+  let data: { generated_at?: string; tasks?: UpstreamTask[] } | null = null;
   let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 3 && !res; attempt++) {
+  for (let attempt = 0; attempt < 3 && !data; attempt++) {
     try {
       const params = new URLSearchParams({ token: c.token, status: "all" });
-      if (lastUpstreamAt) params.set("updated_since", lastUpstreamAt);
-      const r = await fetch(`${c.base}/api/todo/v1/tasks?${params}`, {
-        signal: AbortSignal.timeout(20000),
-      });
-      if (!r.ok) throw new Error(`上游 ${r.status}`);
-      res = r;
+      if (syncState.lastUpstreamAt) params.set("updated_since", syncState.lastUpstreamAt);
+      data = await httpGetJson(`${c.base}/api/todo/v1/tasks?${params}`, 20000);
     } catch (e) {
       lastErr = e;
+      console.error(`[campus] 拉取失败(第${attempt + 1}次):`, errMsg(e));
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
-  if (!res) {
-    result.error = lastErr instanceof Error ? lastErr.message : String(lastErr);
-    lastResult = { ...result, at: nowLocal() };
+  if (!data) {
+    result.error = errMsg(lastErr);
+    syncState.lastResult = { ...result, at: nowLocal() };
     return result;
   }
 
   try {
-    const data = (await res.json()) as {
-      generated_at?: string;
-      tasks?: UpstreamTask[];
-    };
     const upstream = data.tasks ?? [];
     result.total = upstream.length;
-    if (data.generated_at) lastUpstreamAt = data.generated_at;
+    if (data.generated_at) syncState.lastUpstreamAt = data.generated_at;
 
     if (!upstream.length) {
-      lastResult = { ...result, at: nowLocal() };
+      syncState.lastResult = { ...result, at: nowLocal() };
       return result;
     }
 
@@ -217,10 +232,10 @@ export async function syncCampusTasks(): Promise<SyncResult> {
       }
     }
   } catch (e) {
-    result.error = e instanceof Error ? e.message : "同步失败";
+    result.error = errMsg(e);
   }
 
-  lastResult = { ...result, at: nowLocal() };
+  syncState.lastResult = { ...result, at: nowLocal() };
   return result;
 }
 
@@ -238,31 +253,50 @@ export async function writebackStatus(
   if (!c) return { ok: false };
   const status = done ? "completed" : "open";
 
-  async function attempt(version: number | null) {
-    return fetch(`${c!.base}/api/todo/v1/tasks/${taskId}/status?token=${c!.token}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        version !== null ? { status, version } : { status }
-      ),
-      signal: AbortSignal.timeout(10000),
-    });
+  async function attempt(version: number | null): Promise<{ status: number; json: () => unknown }> {
+    // 上游网络不稳定：每次调用最多重试 3 次
+    for (let i = 0; i < 3; i++) {
+      try {
+        const r = await httpRequest(
+          `${c!.base}/api/todo/v1/tasks/${taskId}/status?token=${c!.token}`,
+          {
+            method: "POST",
+            body: JSON.stringify(
+              version !== null ? { status, version } : { status }
+            ),
+            timeoutMs: 20000,
+          }
+        );
+        return {
+          status: r.status,
+          json: () => JSON.parse(r.body.toString("utf8")),
+        };
+      } catch (e) {
+        if (i === 2) throw e;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    throw new Error("unreachable");
+  }
+
+  function parseJson(fn: () => unknown): Record<string, unknown> | null {
+    try {
+      return fn() as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 
   try {
     let res = await attempt(revision);
     if (res.status === 412) {
-      const d = (await res.json().catch(() => null)) as {
-        current_revision?: number;
-      } | null;
+      const d = parseJson(res.json) as { current_revision?: number } | null;
       if (d?.current_revision !== undefined) {
         res = await attempt(d.current_revision);
       }
     }
-    if (!res.ok) return { ok: false };
-    const d = (await res.json().catch(() => null)) as {
-      version?: number;
-    } | null;
+    if (res.status < 200 || res.status >= 300) return { ok: false };
+    const d = parseJson(res.json) as { version?: number } | null;
     // 更新本地 revision，避免下次同步误判
     if (d?.version !== undefined) {
       getDb()
@@ -270,7 +304,8 @@ export async function writebackStatus(
         .run(d.version, taskId);
     }
     return { ok: true, newRev: d?.version };
-  } catch {
+  } catch (e) {
+    console.error(`[campus] 回写失败 ${taskId} -> ${status}:`, e);
     return { ok: false };
   }
 }
@@ -278,9 +313,8 @@ export async function writebackStatus(
 /** 服务启动时调用：立即同步一次，之后每 10 分钟同步 */
 export function startCampusSyncLoop() {
   if (!process.env.CAMPUS_API_URL) return;
-  const g = globalThis as unknown as { __campusSyncStarted?: boolean };
-  if (g.__campusSyncStarted) return;
-  g.__campusSyncStarted = true;
+  if (syncState.started) return;
+  syncState.started = true;
   syncCampusTasks().catch(() => {});
   setInterval(() => syncCampusTasks().catch(() => {}), SYNC_INTERVAL_MS).unref();
 }

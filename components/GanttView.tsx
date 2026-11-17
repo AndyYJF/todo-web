@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Task } from "@/lib/types";
 import { isOverdue, nowLocal } from "@/lib/datetime";
 
@@ -19,8 +19,11 @@ export default function GanttView({
   tasks: Task[];
   onOpen: (t: Task) => void;
 }) {
+  const [showDone, setShowDone] = useState(false);
   const rows = useMemo(() => {
-    const withTime = tasks.filter((t) => t.startAt || t.dueAt);
+    const withTime = tasks.filter(
+      (t) => (t.startAt || t.dueAt) && (showDone || !t.done)
+    );
     const items = withTime.map((t) => {
       const start = t.startAt ? toMs(t.startAt) : t.dueAt ? toMs(t.dueAt) - 3600e3 : 0;
       const end = t.dueAt ? toMs(t.dueAt) : t.startAt ? toMs(t.startAt) + 3600e3 : 0;
@@ -28,8 +31,12 @@ export default function GanttView({
     });
     items.sort((a, b) => a.start - b.start);
     return items;
-  }, [tasks]);
+  }, [tasks, showDone]);
 
+  const doneCount = useMemo(
+    () => tasks.filter((t) => (t.startAt || t.dueAt) && t.done).length,
+    [tasks]
+  );
   const { rangeStart, days } = useMemo(() => {
     if (!rows.length) return { rangeStart: 0, days: [] as number[] };
     const now = Date.now();
@@ -71,9 +78,23 @@ export default function GanttView({
 
   return (
     <div className="max-w-4xl">
-      <h1 className="font-display text-[40px] leading-tight tracking-tight mb-6">
-        甘特图
-      </h1>
+      <div className="flex items-end justify-between mb-6">
+        <h1 className="font-display text-[40px] leading-tight tracking-tight">
+          甘特图
+        </h1>
+        {doneCount > 0 && (
+          <button
+            onClick={() => setShowDone((v) => !v)}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              showDone
+                ? "bg-ink text-paper border-ink"
+                : "text-ink-soft border-line hover:border-ink/25"
+            }`}
+          >
+            {showDone ? "隐藏已完成" : `显示已完成 (${doneCount})`}
+          </button>
+        )}
+      </div>
 
       <div className="bg-card border border-line rounded-2xl shadow-card p-4 overflow-x-auto">
         <div style={{ minWidth: LABEL_W + days.length * 44 }}>
