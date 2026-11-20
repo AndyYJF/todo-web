@@ -1,6 +1,14 @@
-# Todo Android · A5/A6
+# Todo Android 0.6.0
 
 独立 Flutter Android 客户端，UI 与动效只采用 FlClash v0.9.3 同版 Prism UI，不复用 Web 视觉。
+
+## 安装与连接
+
+个人 Release APK 面向 arm64 手机，最低 Android 7.0（API 24）。使用同一签名的 APK 覆盖安装可保留应用数据。登录时填写 Todo 站点的 HTTPS 地址和站点密码。
+
+在 **更多 → 设置 → 后台同步与提醒** 可以开启后台同步、新校园任务提醒和截止时提醒。启用提醒时按需授予系统通知权限。后台约每 30 分钟读取一次，执行时间受 Android 调度影响。
+
+[返回项目首页](../README.md) · [真机验收记录](../docs/android-a5-a6-progress.md)
 
 ## 当前能力
 
@@ -42,7 +50,7 @@
 flutter pub get
 flutter analyze --no-pub
 flutter run -d <device>
-flutter build apk --release --target-platform android-arm64 --target lib/main.dart
+flutter build apk --release --target-platform android-arm64 --no-pub --target lib/main.dart
 ~~~
 
 会话、设置、草稿、单笔待确认提交和 JSON 任务快照存放在应用私有 support 目录，禁用 Android 自动备份，不引入额外数据库或加密。服务地址仅接受 HTTPS origin；HTTP 回环仅供本地验证入口显式启用。请求禁止自动重定向，不向其他 origin 发送 Cookie。

@@ -1,48 +1,57 @@
 # Todo 待办清单
 
-自托管的个人待办清单网站。暖纸底色 + 克莱因蓝点缀的杂志风设计，Framer Motion 全链路动画，支持校园事务自动同步。
+自托管的单用户待办清单。Web 和 Android 通过同一套 Todo API 读写服务器上的任务与项目。Web 采用暖纸色、克莱因蓝和 Motion 动效。Android 使用 FlClash 同版 Prism UI 的导航、卡片和面板动效。
 
-线上地址：https://todo.fei.cx （需登录）
+[打开在线版（需登录）](https://todo.fei.cx) · [Android 使用与构建](mobile/README.md) · [开发计划](docs/android-app-plan.md) · [真机验收](docs/android-a5-a6-progress.md)
 
 ## 功能
 
-- **今日视图**：当天任务 + 快速添加（`/` 聚焦输入框，回车即建），支持截止时间预设
-- **全部任务**：进行中 / 已完成 / 全部 切换，按项目筛选
-- **日历**：月视图，按截止日期归组，点日期看当天任务
-- **甘特图**：按开始/截止时间画横道，今天竖线按真实时间定位
-- **项目跟踪**：按项目分组的进度条
-- **置顶磁贴**：重要任务钉成卡片墙
-- **任务详情**：悬浮卡片，自定义日期时间选择器（小日历弹层），备注内图片直接渲染、点击放大
-- **校园事务同步**：每 10 分钟增量拉取上游事务 API（`updated_since` 游标），完成状态双向回写，群消息原文入备注
-- **登录保护**：密码登录 + HMAC 签名 Cookie（30 天会话），全站中间件鉴权
-- **移动端适配**：汉堡抽屉导航、详情全屏化
-
-## 技术栈
-
-Next.js 16 (App Router, standalone) · React 19 · Tailwind CSS 4 · Framer Motion · node:sqlite（零原生依赖）· TypeScript
-
-## 本地开发
-
-```bash
-npm install
-TODO_PASSWORD=你的密码 npm run dev   # 不设置时开发模式默认密码 todo-dev-default
-# 打开 http://localhost:3000
-```
-
-## 环境变量
-
-| 变量 | 说明 | 默认 |
+| 场景 | Web | Android 0.6.0 |
 | --- | --- | --- |
-| `TODO_PASSWORD` | 站点登录密码 | `todo-dev-default`（仅开发） |
-| `TODO_DB_PATH` | SQLite 数据库文件路径 | `./data/todo.db` |
-| `CAMPUS_API_URL` | 校园事务 API（带 token） | 不设置则关闭同步 |
-| `PORT` / `HOSTNAME` | 监听地址 | 3000 / 0.0.0.0 |
+| 任务管理 | 今日、全部任务、快速添加（`/` 聚焦输入框）、项目筛选、置顶磁贴 | 今日、搜索和状态筛选、新建和编辑、项目分组、置顶、草稿恢复 |
+| 日程 | 月历、甘特图、项目进度 | 月历、日期范围、开始与截止时间选择 |
+| 四象限 | 手动分类、AI 批量分类 | 手动选择或清除象限、AI 批量分类 |
+| 校园事务 | 服务端定期同步、完成状态回写、查看同步结果 | 查看或手动触发校园同步、查看原始备注及图片、新校园任务提醒 |
+| 跨端同步 | 读写服务端任务 | 前台定期刷新、离线查看快照、可选后台读取与截止提醒 |
 
-## 部署
+服务端每 10 分钟增量拉取校园事务。手机的后台同步约每 30 分钟读取 Todo 服务，实际运行时间由 Android 调度。新校园任务和截止提醒可在 Android 设置中分别启用。
 
-```bash
-npm run build          # 产出 .next/standalone 自包含构建
+## Web 本地开发
+
+使用 Node.js 24 和 npm。Web 使用 Next.js App Router、React、Tailwind CSS、Motion、TypeScript 和 Node.js 内置 SQLite。
+
+~~~bash
+npm ci
+npm run dev
+~~~
+
+打开 [本地 Todo](http://localhost:3000)。开发密码默认是 `todo-dev-default`，也可以在启动前设置 `TODO_PASSWORD`。
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `TODO_PASSWORD` | 登录密码和会话签名密钥。上线前应设置独立密码 |
+| `TODO_DB_PATH` | SQLite 文件路径，默认为当前工作目录下的 `data/todo.db` |
+| `CAMPUS_API_URL` | 带 token 的校园事务 API 地址。留空时关闭校园同步 |
+| `MODEL_ENDPOINT`、`MODEL_API_KEY` | AI 分类接口地址和密钥。未配置模型时使用规则分类 |
+| `MODEL_NAME` | 可选的分类模型名称 |
+| `PORT`、`HOSTNAME` | standalone 服务的监听端口和地址 |
+
+## Web 部署
+
+构建 standalone 产物并复制静态资源。启动前在运行环境中设置登录密码与数据库路径。
+
+~~~bash
+npm run build
+mkdir -p .next/standalone/.next
+cp -R public .next/standalone/
+cp -R .next/static .next/standalone/.next/
 node .next/standalone/server.js
-```
+~~~
 
-生产用 systemd 常驻 + Caddy 反代（自动 HTTPS）。数据库是单文件 SQLite，备份 `data/todo.db` 即可；设置页也提供一键导出 JSON。
+生产环境通过 systemd 运行 Next.js，由 Caddy 提供 HTTPS。设置页可导出任务 JSON。
+
+## Android 安装与开发
+
+Android 0.6.0 的个人 Release 包适用于 arm64 手机，最低 Android 7.0。已有安装可用相同签名的 APK 覆盖升级，保留应用数据。连接时填写 Todo 站点的 HTTPS 地址，使用同一个站点密码登录。
+
+Flutter 版本、构建命令、签名配置和提醒开关见 [Android README](mobile/README.md)。0.6.0 已验证真机覆盖升级及后台读取。掉帧专项仍待验收。
