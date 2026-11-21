@@ -47,6 +47,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            if (providers.environmentVariable("TODO_PLANNER_ISOLATED_APP").orNull == "true") {
+                applicationIdSuffix = ".plannercheck"
+            }
+        }
         release {
             signingConfig = signingConfigs.findByName("personal")
         }

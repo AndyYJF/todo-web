@@ -6,6 +6,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:prism_ui/prism_ui.dart' as p;
 
 import '../data/remote_tasks.dart';
+import '../data/planner_client.dart';
+import '../features/planner/planner_page.dart';
 import '../features/login_page.dart';
 import '../ui/task_widgets.dart';
 import '../features/home_shell.dart';
@@ -24,6 +26,12 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
   late final _store = widget.store;
   final _navigator = GlobalKey<NavigatorState>();
   bool _wasAuthenticated = false;
+  PlannerClient? _planner;
+  PlannerClient get _activePlanner {
+    if (_planner?.origin != _store.origin) _planner = PlannerClient(_store);
+    return _planner!;
+  }
+
   p.ThemeMode get _mode => switch (_store.theme) {
     'light' => p.ThemeMode.light,
     'dark' => p.ThemeMode.dark,
@@ -43,6 +51,7 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
 
   void _authChanged() {
     if (_wasAuthenticated && !_store.authenticated) {
+      _planner = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _navigator.currentState?.popUntil((route) => route.isFirst);
@@ -59,22 +68,30 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
     final background = _store.background;
     if (background?.pendingTap == null) return;
     final tap = background!.takeTap()!;
-    if (tap['origin'] != _store.origin || tap['id'] is! int) return;
+    final date = tap['date'] as String?;
+    final id = tap['id'] as int?;
+    if (tap['origin'] != _store.origin || (date == null && id == null)) return;
     _openingNotification = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _store.resume();
-      if (mounted && _store.authenticated && tap['origin'] == _store.origin) {
-        final context = _navigator.currentContext;
-        if (context != null && context.mounted) {
-          _navigator.currentState?.push(
-            todoPageRoute<void>(
-              context,
-              (_) => TaskDetail(store: _store, id: tap['id'] as int),
-            ),
-          );
+      try {
+        if (id != null) await _store.resume();
+        if (mounted && _store.authenticated && tap['origin'] == _store.origin) {
+          final context = _navigator.currentContext;
+          if (context != null && context.mounted) {
+            _navigator.currentState?.push(
+              todoPageRoute<void>(
+                context,
+                (_) => date != null
+                    ? PlannerPage(client: _activePlanner, initialDate: date)
+                    : TaskDetail(store: _store, id: id!),
+              ),
+            );
+          }
         }
+      } finally {
+        _openingNotification = false;
+        if (mounted) _openNotification();
       }
-      _openingNotification = false;
     });
   }
 
@@ -160,6 +177,7 @@ class _TodoAppState extends State<TodoApp> with WidgetsBindingObserver {
           ? LoginPage(store: _store)
           : HomeShell(
               store: _store,
+              planner: _activePlanner,
               themeMode: _mode,
               onThemeChanged: (mode) => _store.setTheme(mode.name),
             ),

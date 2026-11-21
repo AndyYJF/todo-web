@@ -13,6 +13,8 @@ import {
   IconSun,
 } from "./icons";
 
+import { plannerWebEnabled } from "@/lib/planner/client";
+
 export type ViewKey =
   | "today"
   | "planner"
@@ -77,7 +79,7 @@ export default function Sidebar({
         工作台
       </div>
       <nav className="space-y-0.5">
-        {ITEMS.map(({ key, label, Icon }) => {
+        {ITEMS.filter(({ key }) => key !== "planner" || plannerWebEnabled).map(({ key, label, Icon }) => {
           const active = view === key;
           const badge = badges[key];
           return (

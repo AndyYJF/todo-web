@@ -17,6 +17,16 @@ export const planStatusLabel: Record<PlanItem["status"], string> = {
   pending: "未记录", done: "已完成", unfinished: "未完成",
 };
 
+export const plannerWebEnabled = process.env.NEXT_PUBLIC_TODO_PLANNER_WEB !== "0";
+
+export type PlannerSettings = {
+  revision: number;
+  enabled: boolean;
+  time: string;
+  timeZone: string;
+  serverTime: number;
+};
+
 export type ImportPreview = {
   checksum: string; baseVersion: number; effectiveFrom: string; serverTime: number;
   from: string; through: string; count: number; added: number; updated: number;
@@ -27,19 +37,19 @@ export type SchoolWeek = {
 };
 
 export class PlannerResponseError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string, readonly current?: PlanItem) {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly current?: PlanItem, readonly settings?: PlannerSettings) {
     super(message);
   }
   get uncertain() { return this.status === 0 || this.status === 408 || this.status >= 500; }
 }
 
-export async function plannerRequest<T>(path = "", body?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+export async function plannerRequest<T>(path = "", body?: Record<string, unknown>, signal?: AbortSignal, method: "POST" | "PUT" = "POST"): Promise<T> {
   let response: Response;
   try {
     const timeout = AbortSignal.timeout(20_000);
     response = await fetch("/api/planner" + path, {
       cache: "no-store", signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+      ...(body ? { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
     });
   } catch {
     throw new PlannerResponseError("连接失败，请检查网络后重试", 0);
@@ -51,7 +61,8 @@ export async function plannerRequest<T>(path = "", body?: Record<string, unknown
   }
   if (!response.ok) throw new PlannerResponseError(
     data?.error ?? (response.status === 404 ? "当前站点尚未启用规划明天" : "规划服务暂时不可用"),
-    response.status, data?.code, data?.current,
+    response.status, data?.code, data?.code === "item_conflict" ? data.current : undefined,
+    data?.code === "settings_conflict" ? data.current : undefined,
   );
   if (!data) throw new PlannerResponseError("服务返回了无效响应，请重试", 0);
   return data as T;

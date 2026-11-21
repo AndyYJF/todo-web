@@ -44,7 +44,7 @@ class ApiFailure implements Exception {
   String toString() => message;
 }
 
-enum PlannerResource { day, history, timetable, academicCalendar }
+enum PlannerResource { day, history, timetable, academicCalendar, settings }
 
 class PlannerApiFailure extends ApiFailure {
   const PlannerApiFailure(
@@ -250,10 +250,15 @@ class TodoApi {
       PlannerResource.day || PlannerResource.history => '/api/planner',
       PlannerResource.timetable => '/api/planner/timetable',
       PlannerResource.academicCalendar => '/api/planner/academic-calendar',
+      PlannerResource.settings => '/api/planner/settings',
     };
     final response = await _request(
       path,
-      method: body == null ? 'GET' : 'POST',
+      method: body == null
+          ? 'GET'
+          : resource == PlannerResource.settings
+          ? 'PUT'
+          : 'POST',
       query: {
         'date': ?date,
         if (resource == PlannerResource.history) 'view': 'history',

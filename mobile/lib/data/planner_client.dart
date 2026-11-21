@@ -110,6 +110,19 @@ class PlannerClient {
     return page;
   }
 
+  Map<String, dynamic>? reminderAttempt;
+
+  Future<Map<String, dynamic>> reminder({Map<String, dynamic>? body}) async {
+    final settings = await store.plannerRequest(
+      PlannerResource.settings,
+      body: body,
+    );
+    if (_current) {
+      await store.background?.applyPlannerSettings(origin, settings);
+    }
+    return settings;
+  }
+
   Future<Map<String, dynamic>> schoolWeek(String date) =>
       store.plannerRequest(PlannerResource.academicCalendar, date: date);
   Future<Map<String, dynamic>> write(Map<String, dynamic> body) =>

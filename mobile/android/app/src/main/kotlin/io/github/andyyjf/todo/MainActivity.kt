@@ -1,5 +1,6 @@
 package io.github.andyyjf.todo
 
+import org.json.JSONObject
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.provider.OpenableColumns
@@ -84,9 +85,17 @@ class MainActivity : FlutterActivity() {
     private var pendingTap: Map<String,Any>? = null
     private var permissionResult: MethodChannel.Result? = null
     private fun tap(intent: Intent?) {
-        val id=intent?.getIntExtra("taskId",0) ?: 0
-        val origin=intent?.getStringExtra("todoOrigin")
-        if(id>0 && origin!=null) {pendingTap=mapOf("id" to id,"origin" to origin);bridge?.invokeMethod("notificationTap",null)}
+        val origin = intent?.getStringExtra("todoOrigin") ?: return
+        val date = intent.getStringExtra("plannerDate")
+        val id = intent.getIntExtra("taskId", 0)
+        pendingTap = when {
+            intent.action == PlannerReminder.OPEN && date != null &&
+                date.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) &&
+                intent.data == Uri.parse("todo://planner/$date") -> mapOf("date" to date, "origin" to origin)
+            id > 0 -> mapOf("id" to id, "origin" to origin)
+            else -> return
+        }
+        bridge?.invokeMethod("notificationTap", null)
     }
     override fun onCreate(savedInstanceState: Bundle?) {super.onCreate(savedInstanceState);tap(intent)}
     override fun onNewIntent(intent: Intent) {super.onNewIntent(intent);setIntent(intent);tap(intent)}
@@ -115,6 +124,11 @@ class MainActivity : FlutterActivity() {
                             "attach" -> {TodoBackground.attach(applicationContext,call.argument<String>("path")!!,call.argument<Boolean>("local")==true);TodoBackground.status(applicationContext)}
                             "stateChanged" -> {TodoBackground.stateChanged(applicationContext);TodoBackground.status(applicationContext)}
                             "status" -> TodoBackground.status(applicationContext)
+                            "plannerSettings" -> {
+                                val data = JSONObject(call.arguments as Map<*, *>)
+                                TodoBackground.applyPlannerSettings(applicationContext, data.getString("origin"), data)
+                                TodoBackground.status(applicationContext)
+                            }
                             "options" -> {TodoBackground.setOptions(applicationContext,call.arguments as Map<*,*>);TodoBackground.status(applicationContext)}
                             "runNow" -> {TodoBackground.runNow(applicationContext);null}
                             "snapshot" -> TodoBackground.readSnapshot(applicationContext)
@@ -128,13 +142,17 @@ class MainActivity : FlutterActivity() {
     }
     override fun onRequestPermissionsResult(requestCode: Int,permissions: Array<out String>,grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults)
-        if(requestCode==902) {permissionResult?.success(TodoBackground.notificationsAllowed(this));permissionResult=null}
+        if (requestCode == 902) {
+            permissionResult?.success(TodoBackground.notificationsAllowed(this))
+            permissionResult = null
+            TodoBackground.io.execute { TodoBackground.restore(applicationContext) }
+        }
     }
     override fun onDestroy() {if(TodoBackground.channel===bridge) TodoBackground.channel=null;super.onDestroy()}
 
     override fun onResume() {
         super.onResume()
-        TodoBackground.io.execute { TodoBackground.restore(applicationContext) }
+        TodoBackground.io.execute { TodoBackground.restore(applicationContext, foreground = true) }
         @Suppress("DEPRECATION")
         val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
         val currentMode = currentDisplay?.mode ?: return

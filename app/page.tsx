@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import Sidebar, { type ViewKey } from "@/components/Sidebar";
 import PlannerView from "@/components/PlannerView";
+import { plannerWebEnabled } from "@/lib/planner/client";
 import TodayView from "@/components/TodayView";
 import AllTasksView from "@/components/AllTasksView";
 import CalendarView from "@/components/CalendarView";
@@ -223,9 +224,9 @@ export default function Home() {
               <>
             {view === "today" && (
               <>
-              <div className="mb-4 flex justify-end">
+              {plannerWebEnabled && <div className="mb-4 flex justify-end">
                 <button type="button" className="rounded-lg border border-line bg-card px-3 py-2 text-sm font-medium text-accent hover:border-accent" onClick={() => setView("planner")}>规划明天</button>
-              </div>
+              </div>}
               <TodayView
                 tasks={tasks}
                 onQuickCreate={quickCreate}

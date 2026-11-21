@@ -86,6 +86,19 @@ class AndroidBackground extends ChangeNotifier {
     _notify();
   }
 
+  Future<void> applyPlannerSettings(
+    String origin,
+    Map<String, dynamic> settings,
+  ) async {
+    if (!_attached) return;
+    final result = await _call<Map>('plannerSettings', {
+      ...settings,
+      'origin': origin,
+    });
+    if (result != null) status = Map<String, dynamic>.from(result);
+    _notify();
+  }
+
   Future<void> requestNotifications() async {
     await _call<bool>('requestNotifications');
     await refreshStatus();

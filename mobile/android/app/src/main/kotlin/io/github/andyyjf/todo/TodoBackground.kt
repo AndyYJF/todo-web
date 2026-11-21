@@ -25,6 +25,7 @@ internal object TodoBackground {
     val io = Executors.newSingleThreadExecutor()
     private val lock = Any()
     private val networkLock = Any()
+    private val plannerNetworkLock = Any()
     var channel: MethodChannel? = null
     private var processInitialized = false
     private fun prefs(c: Context) = synchronized(lock) {
@@ -80,6 +81,7 @@ internal object TodoBackground {
     private fun clearAccount(c: Context) {
         val p=prefs(c);val old=JSONObject(p.getString("alarms","{}")!!)
         for(id in old.keys()) cancelAlarm(c,id.toInt())
+        PlannerReminder.clear(c, p)
         c.getSystemService(NotificationManager::class.java).cancelAll()
         WorkManager.getInstance(c).cancelUniqueWork(PERIODIC);WorkManager.getInstance(c).cancelUniqueWork(ONCE)
         p.edit().remove("activeKey").remove("seen").remove("processed").remove("lastSuccess").remove("lastAttempt").remove("message").remove("sessionInvalid").putString("alarms","{}").putStringSet("sent",emptySet()).commit()
@@ -87,8 +89,11 @@ internal object TodoBackground {
     fun stateChanged(c: Context) = synchronized(lock) {
         val s=session(c);val p=prefs(c)
         if(s==null) { if(p.contains("activeKey")) clearAccount(c);return@synchronized }
-        if(p.getString("activeKey",null)!=s.key) {clearAccount(c);p.edit().putString("activeKey",s.key).commit()}
+        val changed = p.getString("activeKey", null) != s.key
+        if (changed) {clearAccount(c);p.edit().putString("activeKey",s.key).commit()}
         if(p.getBoolean("sessionInvalid",false)) return@synchronized
+        if (changed) PlannerReminder.bind(c, immediate = true)
+        PlannerReminder.restore(c, p, s.origin, s.key, force = false)
         if(p.getBoolean("enabled",false)) {
             val request=PeriodicWorkRequest.Builder(TodoReadWorker::class.java,30,TimeUnit.MINUTES).setInitialDelay(30,TimeUnit.MINUTES).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
             WorkManager.getInstance(c).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.KEEP,request)
@@ -109,7 +114,8 @@ internal object TodoBackground {
     private fun exact(c: Context) = Build.VERSION.SDK_INT<31 || c.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
     fun status(c: Context): Map<String,Any?> = synchronized(lock) {
         val p=prefs(c)
-        mapOf("enabled" to p.getBoolean("enabled",false),"campus" to p.getBoolean("campus",false),"deadline" to p.getBoolean("deadline",false),"notificationsAllowed" to notificationsAllowed(c),"exactAllowed" to exact(c),"sessionInvalid" to p.getBoolean("sessionInvalid",false),"lastAttempt" to p.getLong("lastAttempt",0),"lastSuccess" to p.getLong("lastSuccess",0),"message" to p.getString("message",null),"running" to p.getBoolean("running",false),"scheduledAlarms" to JSONObject(p.getString("alarms","{}")!!).length())
+        mapOf("enabled" to p.getBoolean("enabled",false),"campus" to p.getBoolean("campus",false),"deadline" to p.getBoolean("deadline",false),"notificationsAllowed" to notificationsAllowed(c),"exactAllowed" to exact(c),"sessionInvalid" to p.getBoolean("sessionInvalid",false),"lastAttempt" to p.getLong("lastAttempt",0),"lastSuccess" to p.getLong("lastSuccess",0),"message" to p.getString("message",null),"running" to p.getBoolean("running",false),"scheduledAlarms" to JSONObject(p.getString("alarms","{}")!!).length(),
+            "plannerNextAt" to p.getLong("plannerNextAt", 0L))
     }
     fun readSnapshot(c: Context): Map<String,Any?>? = synchronized(lock) {
         val s=session(c) ?: return@synchronized null
@@ -159,7 +165,78 @@ internal object TodoBackground {
         for(id in old.keys()) if(!next.has(id)) cancelAlarm(c,id.toInt())
         p.edit().putString("alarms",next.toString()).putBoolean("alarmMode",mode).commit()
     }
-    fun restore(c: Context) = synchronized(lock) {stateChanged(c);scheduleAlarms(c,session(c),true);signal()}
+    fun restore(c: Context, foreground: Boolean = false) = synchronized(lock) {
+        stateChanged(c)
+        val s = session(c)
+        scheduleAlarms(c, s, true)
+        val p = prefs(c)
+        if (s != null && !p.getBoolean("sessionInvalid", false)) {
+            PlannerReminder.restore(c, p, s.origin, s.key, force = true)
+            PlannerReminder.bind(c, immediate = foreground)
+        }
+        signal()
+    }
+
+    fun applyPlannerSettings(c: Context, origin: String, data: JSONObject) = synchronized(lock) {
+        stateChanged(c)
+        val s = session(c)
+        val p = prefs(c)
+        if (s != null && s.origin == origin && !p.getBoolean("sessionInvalid", false)) {
+            PlannerReminder.apply(c, p, s.origin, s.key, data)
+        }
+    }
+
+    fun deliverPlanner(c: Context, at: Long, account: String) = synchronized(lock) {
+        val s = session(c)
+        val p = prefs(c)
+        if (s != null && s.key == account && !p.getBoolean("sessionInvalid", false)) {
+            PlannerReminder.deliver(c, p, s.origin, s.key, at)
+            signal()
+        }
+    }
+
+    fun syncPlannerSettings(c: Context): Boolean = synchronized(plannerNetworkLock) {
+        val start = synchronized(lock) {
+            session(c)?.takeIf { !prefs(c).getBoolean("sessionInvalid", false) }
+        } ?: return@synchronized true
+        try {
+            val connection = URL(start.origin + "/api/planner/settings").openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 12000
+            connection.readTimeout = 20000
+            connection.setRequestProperty("Cookie", "todo_session=" + start.cookie)
+            connection.setRequestProperty("Accept", "application/json")
+            val status: Int
+            val data: JSONObject?
+            try {
+                status = connection.responseCode
+                data = if (status == 200) JSONObject(connection.inputStream.bufferedReader().use { it.readText() }) else null
+            } finally {
+                connection.disconnect()
+            }
+            synchronized(lock) apply@{
+                val current = session(c)
+                val p = prefs(c)
+                if (current?.key != start.key || current.path != start.path || p.getBoolean("sessionInvalid", false)) {
+                    return@apply true
+                }
+                when (status) {
+                    200 -> PlannerReminder.apply(c, p, current.origin, current.key, checkNotNull(data))
+                    401 -> {
+                        clearAccount(c)
+                        p.edit().putString("activeKey", start.key).putBoolean("sessionInvalid", true)
+                            .putString("message", "会话已失效，请打开 App 重新登录").commit()
+                    }
+                    404 -> Unit
+                    else -> return@apply false
+                }
+                signal()
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
     fun deliverDeadline(c: Context,id: Int,at: Long,origin: String) = synchronized(lock) {
         val s=session(c) ?: return@synchronized;val p=prefs(c)
         if(s.origin!=origin || p.getBoolean("sessionInvalid",false) || !p.getBoolean("deadline",false)) return@synchronized
@@ -212,6 +289,22 @@ class TodoReadWorker(context: Context,params: WorkerParameters): Worker(context,
 }
 class TodoReminderReceiver: BroadcastReceiver() {
     override fun onReceive(context: Context,intent: Intent) {
-        val pending=goAsync();TodoBackground.io.execute {try {if(intent.action=="io.github.andyyjf.todo.DEADLINE") TodoBackground.deliverDeadline(context,intent.getIntExtra("taskId",0),intent.getLongExtra("due",0),intent.getStringExtra("origin") ?: "") else TodoBackground.restore(context)} finally {pending.finish()}}
+        val pending = goAsync()
+        TodoBackground.io.execute {
+            try {
+                when (intent.action) {
+                    "io.github.andyyjf.todo.DEADLINE" -> TodoBackground.deliverDeadline(
+                        context, intent.getIntExtra("taskId", 0), intent.getLongExtra("due", 0),
+                        intent.getStringExtra("origin").orEmpty(),
+                    )
+                    PlannerReminder.ALARM -> TodoBackground.deliverPlanner(
+                        context, intent.getLongExtra("plannerAt", 0), intent.getStringExtra("plannerAccount").orEmpty(),
+                    )
+                    else -> TodoBackground.restore(context)
+                }
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }

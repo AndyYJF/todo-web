@@ -15,16 +15,18 @@ import 'planner_controls.dart';
 import 'planner_editor.dart';
 import 'planner_import.dart';
 import 'planner_history.dart';
+import 'planner_reminder_settings.dart';
 
 class PlannerPage extends StatefulWidget {
-  const PlannerPage({super.key, required this.client});
+  const PlannerPage({super.key, required this.client, this.initialDate});
   final PlannerClient client;
+  final String? initialDate;
   @override
   State<PlannerPage> createState() => _PlannerPageState();
 }
 
 class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
-  String _date = plannerShift(plannerToday(), 1);
+  late String _date = widget.initialDate ?? plannerShift(plannerToday(), 1);
   PlanDay? _day;
   String? _error, _notice, _academic;
   bool _ready = false, _fresh = false, _pullReady = false;
@@ -64,6 +66,11 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
       _day = widget.client.cached(_date);
     });
     final initial = _date;
+    if (widget.initialDate != null) {
+      unawaited(_readWeek(initial));
+      await _read();
+      return;
+    }
     try {
       final current = await widget.client.loadDay(null, isCurrent: () => false);
       if (!mounted || _date != initial || _sequence != 0) return;
@@ -378,6 +385,20 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                     onPressed: _ready && !_marking ? _history : null,
                     child: const Text('历史'),
                   ),
+                  if (widget.client.store.background != null)
+                    p.TextButton(
+                      onPressed: _ready && !_marking
+                          ? () => Navigator.of(context).push(
+                              todoPageRoute<void>(
+                                context,
+                                (_) => PlannerReminderSettings(
+                                  client: widget.client,
+                                ),
+                              ),
+                            )
+                          : null,
+                      child: const Text('提醒设置'),
+                    ),
                   p.TextButton(
                     onPressed: _ready ? _read : null,
                     child: const Text('刷新'),

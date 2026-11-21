@@ -19,10 +19,12 @@ class HomeShell extends StatefulWidget {
   const HomeShell({
     super.key,
     required this.store,
+    required this.planner,
     required this.themeMode,
     required this.onThemeChanged,
   });
   final RemoteTaskStore store;
+  final PlannerClient planner;
   final p.ThemeMode themeMode;
   final ValueChanged<p.ThemeMode> onThemeChanged;
   @override
@@ -36,7 +38,6 @@ class _HomeShellState extends State<HomeShell> {
   bool _pullReady = false;
   final _search = TextEditingController();
   final _bucket = PageStorageBucket();
-  late final _planner = PlannerClient(widget.store);
   static const _titles = ['今天', '任务', '四象限', '更多'];
   static const _glyphs = [
     TodoGlyphs.today,
@@ -555,9 +556,9 @@ class _HomeShellState extends State<HomeShell> {
 
   Widget _plannerEntry(BuildContext context) => p.Card(
     padding: EdgeInsets.zero,
-    onPressed: () => Navigator.of(
-      context,
-    ).push(todoPageRoute<void>(context, (_) => PlannerPage(client: _planner))),
+    onPressed: () => Navigator.of(context).push(
+      todoPageRoute<void>(context, (_) => PlannerPage(client: widget.planner)),
+    ),
     child: const p.ListRow(
       leading: GlyphIcon(TodoGlyphs.calendar),
       title: Text('规划明天'),

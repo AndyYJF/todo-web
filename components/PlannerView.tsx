@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { IconCalendar, IconClock } from "./icons";
 import PlannerEditor, { planFields, readPlannerDraft, rememberPlannerDraft, type PlanDraft, type StoredPlanDraft } from "./planner/PlannerEditor";
 import PlannerImport from "./planner/PlannerImport";
+import PlannerReminderSettings from "./planner/PlannerReminderSettings";
 import PlannerHistory from "./planner/PlannerHistory";
 import type { PlanItem } from "@/lib/planner/domain";
 import { primaryButton, quietButton, field } from "./planner/controls";
@@ -286,6 +287,7 @@ export default function PlannerView({ tasks }: { tasks: Task[] }) {
               </li>)}</ul> : <p className="mt-2 text-sm text-ink-soft">未指定时间的安排会显示在这里。</p>}
           </section>
           {!day?.archived && <PlannerImport onImported={(status) => { setMessage(status); void readDay(date); }} />}
+          {!day?.archived && <PlannerReminderSettings />}
         </aside>
       </div>}
     </div>

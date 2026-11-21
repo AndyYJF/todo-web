@@ -1,4 +1,4 @@
-# Todo Android 0.6.0
+# Todo Android 0.7.0
 
 独立 Flutter Android 客户端，UI 与动效只采用 FlClash v0.9.3 同版 Prism UI，不复用 Web 视觉。
 
@@ -8,7 +8,9 @@
 
 在 **更多 → 设置 → 后台同步与提醒** 可以开启后台同步、新校园任务提醒和截止时提醒。启用提醒时按需授予系统通知权限。后台约每 30 分钟读取一次，执行时间受 Android 调度影响。
 
-[返回项目首页](../README.md) · [真机验收记录](../docs/android-a5-a6-progress.md)
+规划入口在「今天」和「更多」。打开「规划明天 → 提醒设置」可开关每日提醒，初始时间为 21:30（UTC+8）。Web 与 Android 共用开关和时间，手机定期读取设置并用最近一次同步的配置调度。点按通知会打开当晚对应的日期。生产站点升级后即可使用。
+
+[返回项目首页](../README.md) · [规划验收记录](../docs/plan-tomorrow.md) · [任务提醒验收](../docs/android-a5-a6-progress.md)
 
 ## 当前能力
 
