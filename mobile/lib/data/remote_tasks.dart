@@ -630,6 +630,26 @@ class RemoteTaskStore extends ChangeNotifier {
 
   String _message(Object error) =>
       error is ApiFailure ? error.message : '服务返回的数据无法解析，已保留最近的任务快照';
+  Future<Map<String, dynamic>> plannerRequest(
+    PlannerResource resource, {
+    String? date,
+    Map<String, dynamic>? body,
+  }) async {
+    final api = _api, generation = _generation;
+    try {
+      final data = await api.plannerRequest(resource, date: date, body: body);
+      if (_disposed || generation != _generation) {
+        throw const ApiFailure('当前登录会话已更换');
+      }
+      return data;
+    } on ApiFailure catch (error) {
+      if (!_disposed && generation == _generation && error.unauthorized) {
+        await _expire();
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _expire() async {
     ++_generation;
     _inFlight = null;

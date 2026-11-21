@@ -3,6 +3,8 @@ import 'package:prism_ui/prism_ui.dart' as p;
 import 'package:prism_ui/icons/icons.dart';
 
 import '../data/remote_tasks.dart';
+import '../data/planner_client.dart';
+import 'planner/planner_page.dart';
 import '../ui/read_status.dart';
 import '../data/task.dart';
 import '../ui/task_widgets.dart';
@@ -34,6 +36,7 @@ class _HomeShellState extends State<HomeShell> {
   bool _pullReady = false;
   final _search = TextEditingController();
   final _bucket = PageStorageBucket();
+  late final _planner = PlannerClient(widget.store);
   static const _titles = ['今天', '任务', '四象限', '更多'];
   static const _glyphs = [
     TodoGlyphs.today,
@@ -332,6 +335,8 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
+      const SizedBox(height: 12),
+      _plannerEntry(context),
       SectionHeading('接下来', trailing: '${today.length} 件'),
       if (today.isEmpty) const EmptyTasks(message: '今天的事情都安排好了。'),
       AnimatedSize(
@@ -548,6 +553,19 @@ class _HomeShellState extends State<HomeShell> {
     ];
   }
 
+  Widget _plannerEntry(BuildContext context) => p.Card(
+    padding: EdgeInsets.zero,
+    onPressed: () => Navigator.of(
+      context,
+    ).push(todoPageRoute<void>(context, (_) => PlannerPage(client: _planner))),
+    child: const p.ListRow(
+      leading: GlyphIcon(TodoGlyphs.calendar),
+      title: Text('规划明天'),
+      subtitle: Text('看课表、找空档、安排时间'),
+      trailing: GlyphIcon(Glyphs.chevronForward),
+    ),
+  );
+
   List<Widget> _more(BuildContext context) => [
     p.Card(
       inert: true,
@@ -565,6 +583,8 @@ class _HomeShellState extends State<HomeShell> {
       ),
     ),
     const SectionHeading('浏览'),
+    _plannerEntry(context),
+    const SizedBox(height: 8),
     p.Card(
       padding: EdgeInsets.zero,
       onPressed: () => Navigator.of(context).push(

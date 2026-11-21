@@ -1,5 +1,10 @@
 package io.github.andyyjf.todo
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.provider.OpenableColumns
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import android.os.Build
 import android.os.Bundle
 import android.content.Intent
@@ -11,6 +16,71 @@ import io.flutter.embedding.android.FlutterActivity
 
 class MainActivity : FlutterActivity() {
     private var bridge: MethodChannel? = null
+    private var plannerFileResult: MethodChannel.Result? = null
+    private val plannerFileRequest = 903
+    private val maxPlannerFileBytes = 1024 * 1024
+
+    @Suppress("DEPRECATION")
+    private fun pickPlannerFile(result: MethodChannel.Result) {
+        if (plannerFileResult != null) {
+            result.error("busy", "正在选择课表文件", null)
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+        try {
+            plannerFileResult = result
+            startActivityForResult(intent, plannerFileRequest)
+        } catch (_: ActivityNotFoundException) {
+            plannerFileResult = null
+            result.error("unavailable", "未找到系统文件选择器，可以粘贴课表内容", null)
+        }
+    }
+
+    @Deprecated("Uses the FlutterActivity activity result callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != plannerFileRequest) return
+        val result = plannerFileResult ?: return
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            plannerFileResult = null
+            result.success(null)
+            return
+        }
+        Thread {
+            try {
+                val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { if (it.moveToFirst()) it.getString(0) else null }
+                    ?: uri.lastPathSegment.orEmpty()
+                require(name.endsWith(".ics", ignoreCase = true)) { "请选择 .ics 课表文件" }
+                val raw = contentResolver.openInputStream(uri)?.use { stream ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val size = stream.read(buffer)
+                        if (size == -1) break
+                        require(output.size() + size <= maxPlannerFileBytes) { "课表文件不能超过 1 MiB" }
+                        output.write(buffer, 0, size)
+                    }
+                    output.toByteArray()
+                } ?: error("Cannot open calendar")
+                val text = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(raw)).toString()
+                runOnUiThread {
+                    plannerFileResult = null
+                    result.success(mapOf("name" to name, "text" to text))
+                }
+            } catch (error: Exception) {
+                val message = if (error is IllegalArgumentException) error.message else "无法读取 UTF-8 课表文件"
+                runOnUiThread {
+                    plannerFileResult = null
+                    result.error("ics", message, null)
+                }
+            }
+        }.start()
+    }
+
     private var pendingTap: Map<String,Any>? = null
     private var permissionResult: MethodChannel.Result? = null
     private fun tap(intent: Intent?) {
@@ -22,6 +92,10 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {super.onNewIntent(intent);setIntent(intent);tap(intent)}
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "todo/planner_files")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "pickIcs") pickPlannerFile(result) else result.notImplemented()
+            }
         val channel=MethodChannel(flutterEngine.dartExecutor.binaryMessenger,"todo/background")
         bridge=channel;TodoBackground.channel=channel
         channel.setMethodCallHandler { call,result ->

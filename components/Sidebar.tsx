@@ -3,6 +3,7 @@
 import { motion } from "motion/react";
 import {
   IconCalendar,
+  IconClock,
   IconFolder,
   IconGantt,
   IconList,
@@ -14,6 +15,7 @@ import {
 
 export type ViewKey =
   | "today"
+  | "planner"
   | "all"
   | "calendar"
   | "gantt"
@@ -24,6 +26,7 @@ export type ViewKey =
 
 const ITEMS: { key: ViewKey; label: string; Icon: typeof IconSun }[] = [
   { key: "today", label: "今日", Icon: IconSun },
+  { key: "planner", label: "规划明天", Icon: IconClock },
   { key: "all", label: "全部任务", Icon: IconList },
   { key: "calendar", label: "日历", Icon: IconCalendar },
   { key: "gantt", label: "甘特图", Icon: IconGantt },

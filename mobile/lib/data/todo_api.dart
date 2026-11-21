@@ -44,6 +44,19 @@ class ApiFailure implements Exception {
   String toString() => message;
 }
 
+enum PlannerResource { day, timetable, academicCalendar }
+
+class PlannerApiFailure extends ApiFailure {
+  const PlannerApiFailure(
+    super.message, {
+    super.statusCode,
+    this.code,
+    this.current,
+  });
+  final String? code;
+  final Map<String, dynamic>? current;
+}
+
 class TodoSession {
   const TodoSession(this.value, this.expiresAt);
   final String value;
@@ -225,6 +238,36 @@ class TodoApi {
         uncertain: uncertain,
       );
     }
+  }
+
+  Future<Map<String, dynamic>> plannerRequest(
+    PlannerResource resource, {
+    String? date,
+    Map<String, dynamic>? body,
+  }) async {
+    final path = switch (resource) {
+      PlannerResource.day => '/api/planner',
+      PlannerResource.timetable => '/api/planner/timetable',
+      PlannerResource.academicCalendar => '/api/planner/academic-calendar',
+    };
+    final response = await _request(
+      path,
+      method: body == null ? 'GET' : 'POST',
+      query: date == null ? null : {'date': date},
+      data: body,
+      mutation: body != null && body['action'] != 'preview',
+      acceptedStatuses: {400, 409, 410, 413, 415},
+    );
+    final data = Map<String, dynamic>.from(response.data as Map);
+    if (response.statusCode! >= 400) {
+      throw PlannerApiFailure(
+        data['error'] as String? ?? '规划请求失败',
+        statusCode: response.statusCode,
+        code: data['code'] as String?,
+        current: data['current'] as Map<String, dynamic>?,
+      );
+    }
+    return data;
   }
 
   Future<TodoSession> login(String password) async {
