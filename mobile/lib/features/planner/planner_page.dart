@@ -14,6 +14,7 @@ import '../../ui/todo_motion.dart';
 import 'planner_controls.dart';
 import 'planner_editor.dart';
 import 'planner_import.dart';
+import 'planner_history.dart';
 
 class PlannerPage extends StatefulWidget {
   const PlannerPage({super.key, required this.client});
@@ -27,6 +28,7 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
   PlanDay? _day;
   String? _error, _notice, _academic;
   bool _ready = false, _fresh = false, _pullReady = false;
+  bool _marking = false, _hideDone = false;
   int _sequence = 0, _serverTime = 0, _readAt = 0;
   late final Timer _refreshTimer;
 
@@ -34,6 +36,8 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
   String get _earliest => _day?.openFrom ?? _today;
   bool get _canEdit =>
       _day != null && !_day!.archived && _date.compareTo(_earliest) >= 0;
+  bool get _canMark => _canEdit && _date.compareTo(_today) <= 0;
+  bool get _itemControlsEnabled => !_marking && widget.client.draft == null;
   int _issuedAt() => _serverTime == 0
       ? DateTime.now().millisecondsSinceEpoch
       : _serverTime + DateTime.now().millisecondsSinceEpoch - _readAt;
@@ -136,6 +140,7 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         _notice = null;
         _error = null;
         _fresh = false;
+        _hideDone = false;
       });
       unawaited(_readWeek(next));
     }
@@ -151,7 +156,69 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
     if (mounted && next != null) _select(next);
   }
 
+  Future<void> _history() async {
+    final date = await Navigator.of(context).push(
+      todoPageRoute<String>(
+        context,
+        (_) => PlannerHistory(client: widget.client),
+      ),
+    );
+    if (mounted && date != null) _select(date);
+  }
+
+  Future<void> _mark(PlanItem item) async {
+    if (!_canMark || !_itemControlsEnabled) return;
+    final date = _date;
+    final status = item.status == PlanStatus.done
+        ? PlanStatus.pending
+        : PlanStatus.done;
+    final body = {
+      'action': 'edit',
+      'date': date,
+      'operationId': newPlannerOperation(),
+      'issuedAt': _issuedAt(),
+      'itemId': item.id,
+      'baseVersion': item.version,
+      'fields': {'status': status.name},
+    };
+    final draft = <String, dynamic>{
+      'date': date,
+      'base': item.toJson(),
+      'fields': {...item.fields(), 'status': status.name},
+      'pending': body,
+    };
+    setState(() {
+      _marking = true;
+      _notice = null;
+    });
+    await widget.client.saveDraft(draft);
+    try {
+      await widget.client.write(body);
+      await widget.client.saveDraft(null);
+      if (mounted) {
+        setState(() => _notice = '状态已同步');
+        await _read();
+      }
+    } on ApiFailure catch (error) {
+      final response = error is PlannerApiFailure ? error : null;
+      await widget.client.saveDraft({
+        ...draft,
+        'pending': error.uncertain ? body : null,
+        'error': error.uncertain ? '提交结果待确认，可以重试原操作。' : error.message,
+        'conflict': response?.code == 'item_conflict'
+            ? response?.current
+            : null,
+        'canCorrectHistory':
+            response?.statusCode == 409 &&
+            response?.code == 'history_read_only',
+      });
+    } finally {
+      if (mounted) setState(() => _marking = false);
+    }
+  }
+
   Future<void> _edit({PlanItem? item, PlanInterval? gap}) async {
+    if (_marking) return;
     final fields =
         item?.fields() ??
         {
@@ -161,7 +228,12 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         };
     final draft =
         widget.client.draft ??
-        {'date': _date, 'base': item?.toJson(), 'fields': fields};
+        {
+          'date': _date,
+          'base': item?.toJson(),
+          'fields': fields,
+          'correctHistory': _day?.archived == true,
+        };
     final result = await showTodoFormSheet<String>(
       context: context,
       props: const p.SheetProps(detents: [0.94]),
@@ -169,6 +241,7 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         client: widget.client,
         initial: draft,
         earliest: _earliest,
+        today: _today,
         issuedAt: _issuedAt,
       ),
     );
@@ -214,10 +287,21 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         ? const <PlanInterval>[]
         : plannerTimeline(day);
     final unscheduled =
-        day?.items.where((item) => item.startTime == null) ??
+        day?.items.where(
+          (item) =>
+              item.startTime == null &&
+              (!_hideDone || item.status != PlanStatus.done),
+        ) ??
         const <PlanItem>[];
     final tomorrow = plannerShift(_today, 1);
     final hasDraft = widget.client.draft != null;
+    final done =
+        day?.items.where((item) => item.status == PlanStatus.done).length ?? 0;
+    final unfinished =
+        day?.items
+            .where((item) => item.status == PlanStatus.unfinished)
+            .length ??
+        0;
     final colors = p.Theme.of(context).colorScheme;
     final calendar = DateTime.parse('${_date}T00:00:00Z');
     const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -227,10 +311,11 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         '规划明天',
         back: true,
         actions: [
-          p.TextButton(
-            onPressed: _ready ? _import : null,
-            child: const Text('导入课表'),
-          ),
+          if (day?.archived != true)
+            p.TextButton(
+              onPressed: _ready && !_marking ? _import : null,
+              child: const Text('导入课表'),
+            ),
         ],
       ),
       body: Builder(
@@ -254,19 +339,24 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                     (_date, '所选日期'),
                 ],
                 value: _date,
-                onChanged: _select,
+                onChanged: (day) {
+                  if (!_marking) _select(day);
+                },
               ),
               const SizedBox(height: 10),
               p.Card(
                 padding: EdgeInsets.zero,
-                onPressed: _pickDate,
+                inert: day?.archived == true,
+                onPressed: _marking || day?.archived == true ? null : _pickDate,
                 child: p.ListRow(
                   leading: const GlyphIcon(TodoGlyphs.calendar),
                   title: Text(
                     '${calendar.month}月${calendar.day}日 星期${weekdays[calendar.weekday - 1]}',
                   ),
                   subtitle: Text(_academic ?? _date),
-                  trailing: const GlyphIcon(Glyphs.chevronForward),
+                  trailing: day?.archived == true
+                      ? null
+                      : const GlyphIcon(Glyphs.chevronForward),
                 ),
               ),
               const SizedBox(height: 8),
@@ -276,14 +366,18 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                 children: [
                   if (hasDraft)
                     p.FilledButton(
-                      onPressed: _edit,
+                      onPressed: !_marking ? _edit : null,
                       child: const Text('继续规划草稿'),
                     )
-                  else
+                  else if (_canEdit)
                     p.FilledButton(
-                      onPressed: _canEdit ? _edit : null,
+                      onPressed: !_marking ? _edit : null,
                       child: const Text('添加安排'),
                     ),
+                  p.TextButton(
+                    onPressed: _ready && !_marking ? _history : null,
+                    child: const Text('历史'),
+                  ),
                   p.TextButton(
                     onPressed: _ready ? _read : null,
                     child: const Text('刷新'),
@@ -299,49 +393,60 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                 ),
               if (day != null) ...[
                 if (!_fresh) const PlannerNotice('正在显示本机保存的快照'),
-                if (!_canEdit) const PlannerNotice('该日期已进入历史，稍后可在历史记录中补记。'),
+                if (day.archived) const PlannerNotice('已归档，可补记已有安排。'),
+                if ((_date.compareTo(_today) <= 0 || done > 0) &&
+                    day.items.isNotEmpty)
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      PlannerNotice(
+                        '已完成 $done · 未完成 $unfinished · 未记录 ${day.items.length - done - unfinished}',
+                      ),
+                      if (done > 0)
+                        p.TextButton(
+                          onPressed: () =>
+                              setState(() => _hideDone = !_hideDone),
+                          child: Text(_hideDone ? '显示已完成' : '收起已完成'),
+                        ),
+                    ],
+                  ),
                 SectionHeading('当天时间线', trailing: '${day.courses.length} 节课'),
                 for (final course in day.courses.where(
                   (course) => course.allDay,
                 ))
                   _slot(title: course.title, subtitle: '全天 · 课程', course: true),
                 for (final slot in timeline)
-                  if (slot.isGap)
+                  if (slot.isGap) ...[
+                    if (!day.archived)
+                      _slot(
+                        title:
+                            '${plannerTime(slot.start)}–${plannerTime(slot.end)} 空档',
+                        onPressed: _canEdit && _itemControlsEnabled
+                            ? () => _edit(gap: slot)
+                            : null,
+                        gap: true,
+                      ),
+                  ] else if (slot.course case final course?)
                     _slot(
-                      title:
-                          '${plannerTime(slot.start)}–${plannerTime(slot.end)} 空档',
-                      onPressed: _canEdit && !hasDraft
-                          ? () => _edit(gap: slot)
-                          : null,
-                      gap: true,
-                    )
-                  else
-                    _slot(
-                      title: slot.course?.title ?? slot.item!.title,
+                      title: course.title,
                       subtitle: [
                         '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
-                        if (slot.course case final course?) ...[
-                          '课程',
-                          if (course.location.isNotEmpty) course.location,
-                        ],
-                        if (slot.overlap) '与课程重叠',
+                        '课程',
+                        if (course.location.isNotEmpty) course.location,
                       ].join(' · '),
+                      course: true,
+                    )
+                  else if (!_hideDone || slot.item!.status != PlanStatus.done)
+                    _itemSlot(
+                      slot.item!,
+                      time:
+                          '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
                       warningColor: slot.overlap ? colors.error : null,
-                      course: slot.course != null,
-                      onPressed: slot.item == null || !_canEdit || hasDraft
-                          ? null
-                          : () => _edit(item: slot.item),
                     ),
                 if (unscheduled.isNotEmpty) ...[
                   const SectionHeading('待排程'),
-                  for (final item in unscheduled)
-                    _slot(
-                      title: item.title,
-                      subtitle: item.note.isEmpty ? null : item.note,
-                      onPressed: _canEdit && !hasDraft
-                          ? () => _edit(item: item)
-                          : null,
-                    ),
+                  for (final item in unscheduled) _itemSlot(item),
                 ],
               ],
             ],
@@ -351,11 +456,47 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _itemSlot(PlanItem item, {String? time, Color? warningColor}) {
+    final archived = _day?.archived == true;
+    final edit = (_canEdit || archived) && _itemControlsEnabled
+        ? () => _edit(item: item)
+        : null;
+    final done = item.status == PlanStatus.done;
+    final subtitle = [
+      [
+        ?time,
+        if (_date.compareTo(_today) <= 0 || item.status != PlanStatus.pending)
+          item.status.label,
+        if (warningColor != null) '与课程重叠',
+      ].join(' · '),
+      if (item.note.isNotEmpty) item.note,
+    ].where((line) => line.isNotEmpty).join('\n');
+    return _slot(
+      title: item.title,
+      subtitle: subtitle.isEmpty ? null : subtitle,
+      warningColor: warningColor,
+      onPressed: edit,
+      trailing: archived
+          ? p.TextButton(onPressed: edit, child: const Text('补记'))
+          : _canMark
+          ? Semantics(
+              label: '${done ? '撤销完成' : '勾选完成'} ${item.title}',
+              child: p.Checkbox(
+                value: done,
+                isCircle: true,
+                onChanged: _itemControlsEnabled ? (_) => _mark(item) : null,
+              ),
+            )
+          : null,
+    );
+  }
+
   Widget _slot({
     required String title,
     String? subtitle,
     VoidCallback? onPressed,
     Color? warningColor,
+    Widget? trailing,
     bool course = false,
     bool gap = false,
   }) => Padding(
@@ -376,9 +517,9 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         subtitle: subtitle == null
             ? null
             : Text(subtitle, style: TextStyle(color: warningColor)),
-        trailing: onPressed == null
-            ? null
-            : const GlyphIcon(Glyphs.chevronForward),
+        trailing:
+            trailing ??
+            (onPressed == null ? null : const GlyphIcon(Glyphs.chevronForward)),
       ),
     ),
   );

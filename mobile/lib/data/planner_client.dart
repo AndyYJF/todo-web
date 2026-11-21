@@ -66,7 +66,17 @@ class PlannerClient {
     String? date, {
     required bool Function() isCurrent,
   }) async {
-    final data = await store.plannerRequest(PlannerResource.day, date: date);
+    final Map<String, dynamic> data;
+    try {
+      data = await store.plannerRequest(PlannerResource.day, date: date);
+    } on ApiFailure catch (error) {
+      if (error.statusCode == 410 &&
+          date != null &&
+          _days.remove(date) != null) {
+        await _save();
+      }
+      rethrow;
+    }
     final day = PlanDay.fromJson(data);
     if (date == null) return day;
     if (day.date != date) throw const ApiFailure('服务返回了其他日期');
@@ -81,6 +91,23 @@ class PlannerClient {
       await _save();
     }
     return day;
+  }
+
+  Future<PlanHistory> loadHistory({String? before}) async {
+    final data = await store.plannerRequest(
+      PlannerResource.history,
+      before: before,
+    );
+    final page = PlanHistory.fromJson(data);
+    final first = page.earliestDate;
+    final count = _days.length;
+    _days.removeWhere(
+      (date, cached) => first == null
+          ? cached['archived'] == true
+          : date.compareTo(first) < 0,
+    );
+    if (_days.length != count) await _save();
+    return page;
   }
 
   Future<Map<String, dynamic>> schoolWeek(String date) =>

@@ -633,11 +633,17 @@ class RemoteTaskStore extends ChangeNotifier {
   Future<Map<String, dynamic>> plannerRequest(
     PlannerResource resource, {
     String? date,
+    String? before,
     Map<String, dynamic>? body,
   }) async {
     final api = _api, generation = _generation;
     try {
-      final data = await api.plannerRequest(resource, date: date, body: body);
+      final data = await api.plannerRequest(
+        resource,
+        date: date,
+        before: before,
+        body: body,
+      );
       if (_disposed || generation != _generation) {
         throw const ApiFailure('当前登录会话已更换');
       }

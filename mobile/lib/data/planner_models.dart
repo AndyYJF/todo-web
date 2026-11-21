@@ -7,16 +7,30 @@ String plannerShift(String date, int days) =>
     plannerDate(DateTime.parse('${date}T00:00:00Z').add(Duration(days: days)));
 String plannerToday() => plannerDate(businessNow());
 
+enum PlanStatus {
+  pending('未记录'),
+  done('已完成'),
+  unfinished('未完成');
+
+  const PlanStatus(this.label);
+  final String label;
+
+  static PlanStatus decode(Object? input) =>
+      values.firstWhere((value) => value.name == input, orElse: () => pending);
+}
+
 class PlanItem {
   PlanItem.fromJson(Map data)
     : id = data['id'] as String,
       version = data['version'] as int,
       title = data['title'] as String,
+      status = PlanStatus.decode(data['status']),
       note = data['note'] as String,
       startTime = data['startTime'] as String?,
       endTime = data['endTime'] as String?,
       todoId = data['todoId'] as int?;
   final String id, title, note;
+  final PlanStatus status;
   final int version;
   final String? startTime, endTime;
   final int? todoId;
@@ -27,6 +41,7 @@ class PlanItem {
     'startTime': startTime,
     'endTime': endTime,
     'todoId': todoId,
+    'status': status.name,
   };
 }
 
@@ -62,6 +77,30 @@ class PlanDay {
   final bool archived;
   final List<PlanCourse> courses;
   final List<PlanItem> items;
+}
+
+class PlanHistory {
+  PlanHistory.fromJson(Map<String, dynamic> data)
+    : items = (data['items'] as List)
+          .cast<Map>()
+          .map(PlanHistoryDay.fromJson)
+          .toList(),
+      nextBefore = data['nextBefore'] as String?,
+      earliestDate = data['earliestDate'] as String?,
+      bytes = data['bytes'] as int,
+      limitBytes = data['limitBytes'] as int;
+  final List<PlanHistoryDay> items;
+  final String? nextBefore, earliestDate;
+  final int bytes, limitBytes;
+}
+
+class PlanHistoryDay {
+  PlanHistoryDay.fromJson(Map data)
+    : date = data['date'] as String,
+      doneCount = data['doneCount'] as int,
+      itemCount = data['itemCount'] as int;
+  final String date;
+  final int doneCount, itemCount;
 }
 
 class PlanInterval {

@@ -4,6 +4,19 @@ export type PlanDay = {
   date: string; today: string; openFrom: string; serverTime: number; revision: number;
   timetableRevision: number; archived: boolean; courses: Course[]; items: PlanItem[];
 };
+export type PlanHistory = {
+  items: { date: string; archivedAt: number; itemCount: number; doneCount: number }[];
+  nextBefore: string | null;
+  bytes: number;
+  limitBytes: number;
+  earliestDate: string | null;
+  revision: number;
+};
+
+export const planStatusLabel: Record<PlanItem["status"], string> = {
+  pending: "未记录", done: "已完成", unfinished: "未完成",
+};
+
 export type ImportPreview = {
   checksum: string; baseVersion: number; effectiveFrom: string; serverTime: number;
   from: string; through: string; count: number; added: number; updated: number;
