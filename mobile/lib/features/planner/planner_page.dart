@@ -20,6 +20,7 @@ import 'planner_reminder_settings.dart';
 enum _TimelineKind {
   course('课程'),
   gap('空档'),
+  lunch('午休'),
   plan('安排');
 
   const _TimelineKind(this.label);
@@ -45,6 +46,15 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
 
   String get _today => _day?.today ?? plannerToday();
   String get _earliest => _day?.openFrom ?? _today;
+  static final _lunchColors = {
+    for (final brightness in Brightness.values)
+      brightness: p.ColorScheme.fromSeed(
+        seedColor: const Color(0xFFFF9F0A),
+        brightness: brightness,
+        style: p.ColorStyle.vivid,
+      ),
+  };
+
   bool get _canEdit =>
       _day != null && !_day!.archived && _date.compareTo(_earliest) >= 0;
   bool get _canMark => _canEdit && _date.compareTo(_today) <= 0;
@@ -464,7 +474,14 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                             ? () => _edit(gap: slot)
                             : null,
                       ),
-                  ] else if (slot.course case final course?)
+                  ] else if (slot.isLunch)
+                    _slot(
+                      kind: _TimelineKind.lunch,
+                      title: _TimelineKind.lunch.label,
+                      time:
+                          '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
+                    )
+                  else if (slot.course case final course?)
                     _slot(
                       kind: _TimelineKind.course,
                       title: course.title,
@@ -573,6 +590,11 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         colors.onSurfaceVariant,
         TodoGlyphs.add,
       ),
+      _TimelineKind.lunch => (
+        _lunchColors[colors.brightness]!.primaryContainer,
+        _lunchColors[colors.brightness]!.onPrimaryContainer,
+        TodoGlyphs.lunchBreak,
+      ),
       _TimelineKind.plan => (
         colors.primaryContainer,
         colors.onPrimaryContainer,
@@ -607,7 +629,8 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                   spacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    if (kind != _TimelineKind.gap)
+                    if (kind == _TimelineKind.course ||
+                        kind == _TimelineKind.plan)
                       Text(
                         kind.label,
                         style: caption.copyWith(

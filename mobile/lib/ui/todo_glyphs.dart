@@ -78,6 +78,16 @@ abstract final class TodoGlyphs {
       GlyphVertex(19, 12),
     ], role: GlyphRole.line),
   ]);
+  static const lunchBreak = Glyph([
+    GlyphPolyline([
+      GlyphVertex(9, 5),
+      GlyphVertex(9, 19),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(15, 5),
+      GlyphVertex(15, 19),
+    ], role: GlyphRole.line),
+  ]);
   static const calendar = Glyph([
     GlyphBox(3, 5, 21, 21, 3),
     GlyphPolyline([

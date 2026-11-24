@@ -104,18 +104,21 @@ class PlanHistoryDay {
 }
 
 class PlanInterval {
+  static const lunch = PlanInterval(11 * 60 + 55, 13 * 60 + 50, isLunch: true);
+
   const PlanInterval(
     this.start,
     this.end, {
     this.course,
     this.item,
     this.overlap = false,
+    this.isLunch = false,
   });
   final int start, end;
   final PlanCourse? course;
   final PlanItem? item;
-  final bool overlap;
-  bool get isGap => course == null && item == null;
+  final bool overlap, isLunch;
+  bool get isGap => !isLunch && course == null && item == null;
 }
 
 int _minutes(String value) =>
@@ -139,7 +142,7 @@ List<PlanInterval> plannerTimeline(PlanDay day, {String? excludeItemId}) {
         course: course,
       ),
   ];
-  final booked = [...courses];
+  final booked = [...courses, PlanInterval.lunch];
   for (final item in day.items) {
     if (item.id == excludeItemId ||
         item.startTime == null ||

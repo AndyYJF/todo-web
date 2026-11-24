@@ -58,7 +58,10 @@ class _PlannerEditorState extends State<PlannerEditor> {
     _date = initial['date'] as String;
     _target = initial['target'] as String? ?? _date;
     if (initial['gap'] case [final int start, final int end]) {
-      _gap = PlanInterval(start, end);
+      final lunch = PlanInterval.lunch;
+      if (end <= lunch.start || start >= lunch.end) {
+        _gap = PlanInterval(start, end);
+      }
     }
     _pending = initial['pending'] as Map<String, dynamic>?;
     _history = initial['correctHistory'] == true;
