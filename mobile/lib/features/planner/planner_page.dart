@@ -307,6 +307,83 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
     return false;
   }
 
+  static const _actionBarHeight = 56.0;
+  static const _actionBarMargin = 10.0;
+
+  Widget _plannerActions() {
+    final ready = _ready && !_marking;
+    final hasDraft = widget.client.draft != null;
+    final colors = p.Theme.of(context).colorScheme;
+    final buttons = Row(
+      children: [
+        if (hasDraft || _canEdit)
+          Expanded(
+            flex: 2,
+            child: p.FilledButton(
+              onPressed: !_marking ? _edit : null,
+              child: Text(
+                hasDraft ? '继续草稿' : '添加安排',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        Expanded(
+          child: p.TextButton(
+            onPressed: ready ? _history : null,
+            child: const Text('历史', maxLines: 1),
+          ),
+        ),
+        if (widget.client.store.background != null)
+          Expanded(
+            child: p.TextButton(
+              onPressed: ready
+                  ? () => Navigator.of(context).push(
+                      todoPageRoute<void>(
+                        context,
+                        (_) => PlannerReminderSettings(client: widget.client),
+                      ),
+                    )
+                  : null,
+              child: const Text('提醒', maxLines: 1),
+            ),
+          ),
+        Expanded(
+          child: p.TextButton(
+            onPressed: _ready ? _read : null,
+            child: const Text('刷新', maxLines: 1),
+          ),
+        ),
+      ],
+    );
+    final content = SizedBox(
+      height: _actionBarHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: buttons,
+      ),
+    );
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, _actionBarMargin),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: MediaQuery.disableAnimationsOf(context)
+              ? p.Surface(
+                  color: p.SurfaceLevel.floatingOf(colors).colorOf(colors),
+                  shape: p.AppShape.full,
+                  child: content,
+                )
+              : p.LiquidGlass(
+                  style: p.LiquidGlassStyle.pill(colors),
+                  child: content,
+                ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final day = _day;
@@ -321,7 +398,6 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         ) ??
         const <PlanItem>[];
     final tomorrow = plannerShift(_today, 1);
-    final hasDraft = widget.client.draft != null;
     final done =
         day?.items.where((item) => item.status == PlanStatus.done).length ?? 0;
     final unfinished =
@@ -345,6 +421,8 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
             ),
         ],
       ),
+      foot: _plannerActions(),
+      footInset: _actionBarHeight + _actionBarMargin,
       body: Builder(
         builder: (context) => NotificationListener<ScrollNotification>(
           onNotification: _pullToRefresh,
@@ -352,7 +430,12 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
             physics: const BouncingScrollPhysics(
               parent: AlwaysScrollableScrollPhysics(),
             ),
-            padding: EdgeInsets.fromLTRB(16, context.appBarInset + 16, 16, 28),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              context.appBarInset + 16,
+              16,
+              context.bottomInset + 16,
+            ),
             children: [
               p.SegmentedControl<String>(
                 key: ValueKey((_today, _earliest)),
@@ -387,44 +470,6 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  if (hasDraft)
-                    p.FilledButton(
-                      onPressed: !_marking ? _edit : null,
-                      child: const Text('继续规划草稿'),
-                    )
-                  else if (_canEdit)
-                    p.FilledButton(
-                      onPressed: !_marking ? _edit : null,
-                      child: const Text('添加安排'),
-                    ),
-                  p.TextButton(
-                    onPressed: _ready && !_marking ? _history : null,
-                    child: const Text('历史'),
-                  ),
-                  if (widget.client.store.background != null)
-                    p.TextButton(
-                      onPressed: _ready && !_marking
-                          ? () => Navigator.of(context).push(
-                              todoPageRoute<void>(
-                                context,
-                                (_) => PlannerReminderSettings(
-                                  client: widget.client,
-                                ),
-                              ),
-                            )
-                          : null,
-                      child: const Text('提醒设置'),
-                    ),
-                  p.TextButton(
-                    onPressed: _ready ? _read : null,
-                    child: const Text('刷新'),
-                  ),
-                ],
-              ),
               if (_notice != null) PlannerNotice(_notice!),
               if (_error != null) PlannerNotice(_error!, error: true),
               if (day == null && _error == null)
