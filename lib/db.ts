@@ -68,6 +68,15 @@ export function getDb(): DatabaseSync {
     } catch {
       // 列已存在
     }
+    for (const [name, type] of [
+      ["campus_pending", "TEXT"],
+      ["campus_writeback_error", "TEXT"],
+      ["campus_remote_done", "INTEGER"],
+    ]) {
+      if (!db.prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name = ?").get(name)) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${type}`);
+      }
+    }
     globalForDb.__todoDb = db;
   }
   return globalForDb.__todoDb;

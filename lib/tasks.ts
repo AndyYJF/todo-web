@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getDb, nowLocal, todayEnd } from "./db";
 import type { Task, TaskInput, TaskPatch } from "./types";
 
@@ -158,9 +159,13 @@ export function updateTask(id: number, patch: TaskPatch): Task | null {
       args.push(patch[flag] ? 1 : 0);
     }
   }
-  if ("done" in patch && patch.done !== undefined) {
-    sets.push("done = ?", "done_at = ?");
-    args.push(patch.done ? 1 : 0, patch.done ? nowLocal() : null);
+  if (typeof patch.done === "boolean") {
+    sets.push(
+      "done = ?", "done_at = ?",
+      "campus_pending = CASE WHEN external_id IS NOT NULL THEN ? ELSE NULL END",
+      "campus_writeback_error = NULL",
+    );
+    args.push(patch.done ? 1 : 0, patch.done ? nowLocal() : null, randomUUID());
   }
   for (const axis of ["urgent", "important"] as const) {
     if (patch[axis] !== undefined) {

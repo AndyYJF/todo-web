@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteTask, getTask, updateTask } from "@/lib/tasks";
-import { writebackStatus } from "@/lib/campus-sync";
+import { flushCampusWriteback } from "@/lib/campus-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -29,11 +29,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   }
   const task = updateTask(id, body);
   if (!task) return NextResponse.json({ error: "不存在" }, { status: 404 });
-  // 校园事务任务：勾选状态回写上游（不阻塞响应，失败靠下次全量同步校准）
   if (task.externalId && typeof body.done === "boolean") {
-    writebackStatus(task.externalId, task.externalRev, body.done).catch(
-      () => {}
-    );
+    void flushCampusWriteback(task.id).catch((error) => {
+      console.error("[campus] 处理待回写状态失败:", error);
+    });
   }
   return NextResponse.json({ task });
 }
