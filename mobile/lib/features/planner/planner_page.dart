@@ -17,6 +17,15 @@ import 'planner_import.dart';
 import 'planner_history.dart';
 import 'planner_reminder_settings.dart';
 
+enum _TimelineKind {
+  course('课程'),
+  gap('空档'),
+  plan('安排');
+
+  const _TimelineKind(this.label);
+  final String label;
+}
+
 class PlannerPage extends StatefulWidget {
   const PlannerPage({super.key, required this.client, this.initialDate});
   final PlannerClient client;
@@ -437,27 +446,31 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
                 for (final course in day.courses.where(
                   (course) => course.allDay,
                 ))
-                  _slot(title: course.title, subtitle: '全天 · 课程', course: true),
+                  _slot(
+                    kind: _TimelineKind.course,
+                    title: course.title,
+                    time: '全天',
+                    subtitle: course.location,
+                  ),
                 for (final slot in timeline)
                   if (slot.isGap) ...[
                     if (!day.archived)
                       _slot(
-                        title:
-                            '${plannerTime(slot.start)}–${plannerTime(slot.end)} 空档',
+                        kind: _TimelineKind.gap,
+                        title: _TimelineKind.gap.label,
+                        time:
+                            '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
                         onPressed: _canEdit && _itemControlsEnabled
                             ? () => _edit(gap: slot)
                             : null,
-                        gap: true,
                       ),
                   ] else if (slot.course case final course?)
                     _slot(
+                      kind: _TimelineKind.course,
                       title: course.title,
-                      subtitle: [
-                        '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
-                        '课程',
-                        if (course.location.isNotEmpty) course.location,
-                      ].join(' · '),
-                      course: true,
+                      time:
+                          '${plannerTime(slot.start)}–${plannerTime(slot.end)}',
+                      subtitle: course.location,
                     )
                   else if (!_hideDone || slot.item!.status != PlanStatus.done)
                     _itemSlot(
@@ -484,65 +497,156 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         ? () => _edit(item: item)
         : null;
     final done = item.status == PlanStatus.done;
+    final showState = _canMark || item.status != PlanStatus.pending;
+    final marker = showState
+        ? Semantics(
+            label: '${item.title}，${item.status.label}',
+            hint: _canMark ? (done ? '撤销完成' : '勾选完成') : null,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                p.Checkbox(
+                  value: done,
+                  isCircle: true,
+                  onChanged: _canMark && _itemControlsEnabled
+                      ? (_) => _mark(item)
+                      : null,
+                ),
+                if (item.status == PlanStatus.unfinished)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Center(
+                        child: GlyphIcon(
+                          Glyphs.close,
+                          color: p.Theme.of(context).colorScheme.error,
+                          size: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          )
+        : null;
     final subtitle = [
-      [
-        ?time,
-        if (_date.compareTo(_today) <= 0 || item.status != PlanStatus.pending)
-          item.status.label,
-        if (warningColor != null) '与课程重叠',
-      ].join(' · '),
+      if (_date.compareTo(_today) <= 0 || item.status != PlanStatus.pending)
+        item.status.label,
       if (item.note.isNotEmpty) item.note,
-    ].where((line) => line.isNotEmpty).join('\n');
+    ].join('\n');
     return _slot(
+      kind: _TimelineKind.plan,
       title: item.title,
-      subtitle: subtitle.isEmpty ? null : subtitle,
+      time: time,
+      subtitle: subtitle,
       warningColor: warningColor,
       onPressed: edit,
       trailing: archived
-          ? p.TextButton(onPressed: edit, child: const Text('补记'))
-          : _canMark
-          ? Semantics(
-              label: '${done ? '撤销完成' : '勾选完成'} ${item.title}',
-              child: p.Checkbox(
-                value: done,
-                isCircle: true,
-                onChanged: _itemControlsEnabled ? (_) => _mark(item) : null,
-              ),
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ?marker,
+                p.TextButton(onPressed: edit, child: const Text('补记')),
+              ],
             )
-          : null,
+          : marker,
     );
   }
 
   Widget _slot({
+    required _TimelineKind kind,
     required String title,
+    String? time,
     String? subtitle,
     VoidCallback? onPressed,
     Color? warningColor,
     Widget? trailing,
-    bool course = false,
-    bool gap = false,
-  }) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: p.Card(
-      inert: onPressed == null,
-      onPressed: onPressed,
-      padding: EdgeInsets.zero,
-      child: p.ListRow(
-        leading: GlyphIcon(
-          course
-              ? TodoGlyphs.calendar
-              : gap
-              ? TodoGlyphs.add
-              : TodoGlyphs.tasks,
-        ),
-        title: Text(title),
-        subtitle: subtitle == null
-            ? null
-            : Text(subtitle, style: TextStyle(color: warningColor)),
-        trailing:
-            trailing ??
-            (onPressed == null ? null : const GlyphIcon(Glyphs.chevronForward)),
+  }) {
+    final colors = p.Theme.of(context).colorScheme;
+    final (tint, ink, glyph) = switch (kind) {
+      _TimelineKind.course => (
+        colors.tertiaryContainer,
+        colors.onTertiaryContainer,
+        TodoGlyphs.calendar,
       ),
-    ),
-  );
+      _TimelineKind.gap => (
+        colors.surfaceContainerHighest,
+        colors.onSurfaceVariant,
+        TodoGlyphs.add,
+      ),
+      _TimelineKind.plan => (
+        colors.primaryContainer,
+        colors.onPrimaryContainer,
+        TodoGlyphs.tasks,
+      ),
+    };
+    final base = p.SurfaceLevel.card.colorOf(colors);
+    final caption = p.AppTextStyle.caption1.of(context, emphasized: true);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: p.PressSurface(
+        fill: Color.lerp(base, tint, kind == _TimelineKind.course ? .28 : .54)!,
+        shape: p.AppShape.md,
+        inert: onPressed == null,
+        onPressed: onPressed,
+        minimum: p.Card.minimumOf(context),
+        child: p.ListRow(
+          leading: p.Surface(
+            color: tint,
+            shape: p.AppShape.sm,
+            child: SizedBox.square(
+              dimension: 36,
+              child: Center(child: GlyphIcon(glyph, size: 21, color: ink)),
+            ),
+          ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (time != null) ...[
+                Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (kind != _TimelineKind.gap)
+                      Text(
+                        kind.label,
+                        style: caption.copyWith(
+                          color: Color.lerp(colors.onSurface, ink, .22),
+                        ),
+                      ),
+                    Text(
+                      time,
+                      style: caption.copyWith(
+                        color: colors.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+              ],
+              Text(title),
+            ],
+          ),
+          subtitle:
+              warningColor == null && (subtitle == null || subtitle.isEmpty)
+              ? null
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (warningColor != null)
+                      Text('与课程重叠', style: TextStyle(color: warningColor)),
+                    if (subtitle != null && subtitle.isNotEmpty) Text(subtitle),
+                  ],
+                ),
+          trailing:
+              trailing ??
+              (onPressed == null
+                  ? null
+                  : const GlyphIcon(Glyphs.chevronForward)),
+        ),
+      ),
+    );
+  }
 }
