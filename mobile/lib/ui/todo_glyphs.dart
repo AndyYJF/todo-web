@@ -62,6 +62,12 @@ abstract final class TodoGlyphs {
     GlyphCircle(12, 12, 1.7, solid: true),
     GlyphCircle(19, 12, 1.7, solid: true),
   ]);
+  static const subtract = Glyph([
+    GlyphPolyline([
+      GlyphVertex(5, 12),
+      GlyphVertex(19, 12),
+    ], role: GlyphRole.line),
+  ]);
   static const add = Glyph([
     GlyphPolyline([
       GlyphVertex(12, 5),

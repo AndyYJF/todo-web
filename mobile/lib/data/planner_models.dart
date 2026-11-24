@@ -126,7 +126,7 @@ String plannerTime(int minutes) {
   return '${pad(minutes ~/ 60)}:${pad(minutes % 60)}';
 }
 
-List<PlanInterval> plannerTimeline(PlanDay day) {
+List<PlanInterval> plannerTimeline(PlanDay day, {String? excludeItemId}) {
   final courses = [
     for (final course in day.courses.where((course) => !course.allDay))
       PlanInterval(
@@ -141,7 +141,11 @@ List<PlanInterval> plannerTimeline(PlanDay day) {
   ];
   final booked = [...courses];
   for (final item in day.items) {
-    if (item.startTime == null || item.endTime == null) continue;
+    if (item.id == excludeItemId ||
+        item.startTime == null ||
+        item.endTime == null) {
+      continue;
+    }
     final start = _minutes(item.startTime!), end = _minutes(item.endTime!);
     booked.add(
       PlanInterval(

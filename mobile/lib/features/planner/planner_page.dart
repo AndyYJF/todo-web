@@ -238,6 +238,7 @@ class _PlannerPageState extends State<PlannerPage> with WidgetsBindingObserver {
         {
           'date': _date,
           'base': item?.toJson(),
+          if (gap != null) 'gap': [gap.start, gap.end],
           'fields': fields,
           'correctHistory': _day?.archived == true,
         };

@@ -10,6 +10,7 @@ import '../../ui/task_widgets.dart';
 import '../../ui/todo_glyphs.dart';
 import '../../ui/todo_motion.dart';
 import 'planner_controls.dart';
+import 'planner_time_dial.dart';
 
 class PlannerEditor extends StatefulWidget {
   const PlannerEditor({
@@ -36,12 +37,19 @@ class _PlannerEditorState extends State<PlannerEditor> {
   int? _todoId;
   late PlanStatus _status;
   late bool _history, _canCorrectHistory;
-  late final TextEditingController _title, _start, _end, _note;
+  late final TextEditingController _title, _note;
+  String? _startTime, _endTime;
+  PlanInterval? _gap;
+  bool _pickingTimes = false;
   Map<String, dynamic>? _pending;
   bool _busy = false, _remove = false;
   String? _error;
   bool get _locked => _busy || _pending != null;
-  static final _time = RegExp(r'^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$');
+  String? _draftTime(String? value) {
+    final minutes = plannerTimeMinutes(value);
+    if (minutes != null) return plannerTime(minutes);
+    return value == null || value.trim().isEmpty ? null : value.trim();
+  }
 
   @override
   void initState() {
@@ -49,6 +57,9 @@ class _PlannerEditorState extends State<PlannerEditor> {
     final initial = widget.initial;
     _date = initial['date'] as String;
     _target = initial['target'] as String? ?? _date;
+    if (initial['gap'] case [final int start, final int end]) {
+      _gap = PlanInterval(start, end);
+    }
     _pending = initial['pending'] as Map<String, dynamic>?;
     _history = initial['correctHistory'] == true;
     _canCorrectHistory = initial['canCorrectHistory'] == true;
@@ -64,23 +75,22 @@ class _PlannerEditorState extends State<PlannerEditor> {
         ? PlanStatus.decode(fields['status'])
         : _base?.status ?? PlanStatus.pending;
     _title = TextEditingController(text: fields['title'] as String?);
-    _start = TextEditingController(text: fields['startTime'] as String?);
-    _end = TextEditingController(text: fields['endTime'] as String?);
+    _startTime = _draftTime(fields['startTime'] as String?);
+    _endTime = _draftTime(fields['endTime'] as String?);
     _note = TextEditingController(text: fields['note'] as String?);
   }
 
   @override
   void dispose() {
-    for (final controller in [_title, _start, _end, _note]) {
-      controller.dispose();
-    }
+    _title.dispose();
+    _note.dispose();
     super.dispose();
   }
 
   Map<String, dynamic> _fields() => {
     'title': _title.text.trim(),
-    'startTime': _start.text.trim().isEmpty ? null : _start.text.trim(),
-    'endTime': _end.text.trim().isEmpty ? null : _end.text.trim(),
+    'startTime': _startTime,
+    'endTime': _endTime,
     'note': _note.text,
     'status': _status.name,
     'todoId': _todoId,
@@ -96,6 +106,7 @@ class _PlannerEditorState extends State<PlannerEditor> {
   Future<void> _remember() => widget.client.saveDraft({
     'date': _date,
     'target': _target,
+    if (_gap case final gap?) 'gap': [gap.start, gap.end],
     'base': _base?.toJson(),
     'fields': _fields(),
     'pending': _pending,
@@ -111,9 +122,66 @@ class _PlannerEditorState extends State<PlannerEditor> {
       date: _target,
       earliest: widget.earliest,
     );
-    if (!mounted || value == null) return;
-    setState(() => _target = value);
+    if (!mounted || value == null || value == _target) return;
+    setState(() {
+      _target = value;
+      _gap = null;
+    });
     await _remember();
+  }
+
+  Future<void> _pickTimes() async {
+    if (_pickingTimes) return;
+    _pickingTimes = true;
+    try {
+      FocusScope.of(context).unfocus();
+      final target = _target;
+      final gap = _gap;
+      final gaps = gap == null ? await _availableGaps(target) : [gap];
+      if (!mounted || target != _target || _locked) return;
+      final range = await selectPlannerTimeRange(
+        context,
+        gaps: gaps,
+        start: _startTime,
+        end: _endTime,
+      );
+      if (!mounted || range == null) return;
+      setState(() {
+        _startTime = range.start;
+        _endTime = range.end;
+        _error = null;
+      });
+      await _remember();
+    } on ApiFailure catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      _pickingTimes = false;
+    }
+  }
+
+  Future<List<PlanInterval>> _availableGaps(String date) async {
+    final day =
+        widget.client.cached(date) ??
+        await widget.client.loadDay(
+          date,
+          isCurrent: () => mounted && _target == date,
+        );
+    final gaps = plannerTimeline(
+      day,
+      excludeItemId: _base?.id,
+    ).where((interval) => interval.isGap).toList();
+    final original = _base;
+    final start = plannerTimeMinutes(original?.startTime);
+    final end = plannerTimeMinutes(original?.endTime);
+    if (date == _date &&
+        start != null &&
+        end != null &&
+        end > start &&
+        !gaps.any((gap) => gap.start <= start && gap.end >= end)) {
+      // Keep historical or overlapping arrangements editable within their original span.
+      gaps.add(PlanInterval(start, end));
+    }
+    return gaps;
   }
 
   Future<void> _pickTodo(List<TodoTask> tasks) async {
@@ -159,18 +227,18 @@ class _PlannerEditorState extends State<PlannerEditor> {
   Future<void> _submit({bool remove = false}) async {
     if (_busy || _conflict != null || _canCorrectHistory) return;
     final fields = _fields();
-    final start = fields['startTime'] as String?,
-        end = fields['endTime'] as String?;
-    if (_pending == null &&
-        !remove &&
-        ((fields['title'] as String).isEmpty ||
-            (start == null) != (end == null) ||
-            (start != null &&
-                (!_time.hasMatch(start) ||
-                    !_time.hasMatch(end!) ||
-                    start.compareTo(end) >= 0)))) {
-      setState(() => _error = '填好安排名称，时间两项可留空，或填入有效的 HH:mm 起止时间');
-      return;
+    if (_pending == null && !remove) {
+      if ((fields['title'] as String).isEmpty) {
+        setState(() => _error = '请填写安排名称。');
+        return;
+      }
+      final start = plannerTimeMinutes(_startTime);
+      final end = plannerTimeMinutes(_endTime);
+      if ((_startTime != null || _endTime != null) &&
+          (start == null || end == null || start >= end)) {
+        setState(() => _error = '请在时间转盘上选择有效的起止时间。');
+        return;
+      }
     }
 
     final base = _base;
@@ -241,11 +309,11 @@ class _PlannerEditorState extends State<PlannerEditor> {
     final changed = _difference(_fields(), _base!);
     final fields = {...latest.fields(), ...changed};
     _title.text = fields['title'] as String;
-    _start.text = fields['startTime'] as String? ?? '';
-    _end.text = fields['endTime'] as String? ?? '';
     _note.text = fields['note'] as String;
     setState(() {
       _base = latest;
+      _startTime = fields['startTime'] as String?;
+      _endTime = fields['endTime'] as String?;
       _status = PlanStatus.decode(fields['status']);
       _todoId = fields['todoId'] as int?;
       _conflict = null;
@@ -260,13 +328,11 @@ class _PlannerEditorState extends State<PlannerEditor> {
     String label, {
     int? maxLength,
     int maxLines = 1,
-    TextInputType? keyboardType,
   }) => p.TextField(
     controller: controller,
     enabled: !_locked,
     maxLength: maxLength,
     maxLines: maxLines,
-    keyboardType: keyboardType,
     decoration: p.InputDecoration(hintText: label),
     onChanged: (_) {
       _remember();
@@ -360,24 +426,18 @@ class _PlannerEditorState extends State<PlannerEditor> {
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _field(
-                      _start,
-                      '开始 HH:mm',
-                      keyboardType: TextInputType.datetime,
-                    ),
+              p.Card(
+                padding: EdgeInsets.zero,
+                onPressed: _locked ? null : _pickTimes,
+                child: p.ListRow(
+                  title: const Text('时间转盘'),
+                  subtitle: Text(
+                    _startTime == null && _endTime == null
+                        ? '未设置时间'
+                        : '${_startTime ?? '未设置'} – ${_endTime ?? '未设置'}',
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _field(
-                      _end,
-                      '结束 HH:mm',
-                      keyboardType: TextInputType.datetime,
-                    ),
-                  ),
-                ],
+                  trailing: const GlyphIcon(Glyphs.chevronForward),
+                ),
               ),
               if (_history || _target.compareTo(widget.today) <= 0) ...[
                 const SectionHeading('完成状态'),
