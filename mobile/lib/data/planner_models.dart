@@ -166,7 +166,7 @@ List<PlanInterval> plannerTimeline(PlanDay day, {String? excludeItemId}) {
         ? a.end.compareTo(b.end)
         : a.start.compareTo(b.start),
   );
-  var freeFrom = 8 * 60;
+  var freeFrom = 8 * 60 + 15;
   const freeUntil = 22 * 60;
   final entries = <PlanInterval>[];
   for (final block in booked) {

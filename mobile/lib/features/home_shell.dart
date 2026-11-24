@@ -38,11 +38,14 @@ class _HomeShellState extends State<HomeShell> {
   bool _pullReady = false;
   final _search = TextEditingController();
   final _bucket = PageStorageBucket();
-  static const _titles = ['今天', '任务', '四象限', '更多'];
+  static const _plannerTab = 3;
+  static const _moreTab = 4;
+  static const _titles = ['今天', '任务', '四象限', '规划明天', '更多'];
   static const _glyphs = [
     TodoGlyphs.today,
     TodoGlyphs.tasks,
     TodoGlyphs.quadrant,
+    TodoGlyphs.calendar,
     TodoGlyphs.more,
   ];
   @override
@@ -58,39 +61,45 @@ class _HomeShellState extends State<HomeShell> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
         final content = p.PrismScaffold(
-          bar: todoBar(
-            context,
-            _titles[_selected],
-            actions: [
-              p.IconButton(
-                onPressed: _toggleTheme,
-                icon: const GlyphIcon(TodoGlyphs.today),
-                tooltip: '切换明暗主题',
-              ),
-              if (_selected != 3)
-                p.IconButton.filled(
-                  onPressed:
-                      widget.store.writing || widget.store.pending != null
-                      ? null
-                      : () => openTaskEditor(context, widget.store),
-                  icon: const GlyphIcon(TodoGlyphs.add),
-                  tooltip: '新建任务',
+          // The planner supplies its own toolbar while sharing this dock.
+          bar: _selected == _plannerTab
+              ? const PreferredSize(
+                  preferredSize: Size.zero,
+                  child: SizedBox.shrink(),
+                )
+              : todoBar(
+                  context,
+                  _titles[_selected],
+                  actions: [
+                    p.IconButton(
+                      onPressed: _toggleTheme,
+                      icon: const GlyphIcon(TodoGlyphs.today),
+                      tooltip: '切换明暗主题',
+                    ),
+                    if (_selected != _moreTab)
+                      p.IconButton.filled(
+                        onPressed:
+                            widget.store.writing || widget.store.pending != null
+                            ? null
+                            : () => openTaskEditor(context, widget.store),
+                        icon: const GlyphIcon(TodoGlyphs.add),
+                        tooltip: '新建任务',
+                      ),
+                    p.IconButton(
+                      onPressed: widget.store.refreshing || widget.store.writing
+                          ? null
+                          : () => widget.store.refresh(),
+                      icon: widget.store.refreshing
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: p.ActivityIndicator(),
+                            )
+                          : const GlyphIcon(TodoGlyphs.cloud),
+                      tooltip: '从服务端刷新',
+                    ),
+                  ],
                 ),
-              p.IconButton(
-                onPressed: widget.store.refreshing || widget.store.writing
-                    ? null
-                    : () => widget.store.refresh(),
-                icon: widget.store.refreshing
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: p.ActivityIndicator(),
-                      )
-                    : const GlyphIcon(TodoGlyphs.cloud),
-                tooltip: '从服务端刷新',
-              ),
-            ],
-          ),
           foot: wide
               ? null
               : TodoDock(
@@ -151,6 +160,9 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Widget _page(BuildContext context, bool wide) {
+    if (_selected == _plannerTab) {
+      return PlannerPage(client: widget.planner, embedded: true);
+    }
     final children = switch (_selected) {
       0 => _today(context),
       1 => _tasks(context),
