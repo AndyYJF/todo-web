@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { httpRequest } from "@/lib/httpget";
 
-/** 允许代理的图片源（防开放代理滥用）：校园事务服务器新旧 IP */
-const ALLOWED = [/^https:\/\/campus\.andy-y\.cn\//, /^http:\/\/84\.54\.2\.93:8620\//, /^http:\/\/139\.224\.71\.200:8620\//];
+import { campusImageUrl } from "@/lib/campus-image";
 
 export async function GET(req: NextRequest) {
-  const u = req.nextUrl.searchParams.get("u") ?? "";
-  if (!ALLOWED.some((re) => re.test(u))) {
+  const u = campusImageUrl(req.nextUrl.searchParams.get("u") ?? "");
+  if (!u) {
     return NextResponse.json({ error: "不允许的来源" }, { status: 403 });
   }
   // 上游网络不稳定：重试 2 次（用 node:http 直连，绕开 Next 包装 fetch 的问题）
